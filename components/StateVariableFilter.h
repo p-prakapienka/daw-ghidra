@@ -40,7 +40,7 @@ public:
     explicit StateVariableFilter(bool extendedResonance);
 
     void setMode(Mode mode) { mode_ = mode; }
-    Mode mode() const { return mode_; }
+    Mode getMode() const { return mode_; }
 
     // Normalised 0 .. 1 controls. Both index the tables built in the
     // constructor, so the mapping is the engine's, not a fresh one.
@@ -59,10 +59,10 @@ public:
     void reset();
 
     // Resolved coefficients, for tests and for plotting the response.
-    int cutoffCoefficient() const { return cutoffCoefficient_; }
-    int dampingCoefficient() const { return dampingCoefficient_; }
-    int cutoffTableEntry(int index) const { return cutoffTable_[index]; }
-    int dampingTableEntry(int index) const { return dampingTable_[index]; }
+    int getCutoffCoefficient() const { return cutoffCoefficient_; }
+    int getDampingCoefficient() const { return dampingCoefficient_; }
+    int getCutoffTableEntry(int index) const { return cutoffTable_[index]; }
+    int getDampingTableEntry(int index) const { return dampingTable_[index]; }
 
 private:
     struct Channel {

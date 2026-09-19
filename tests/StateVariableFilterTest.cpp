@@ -46,9 +46,9 @@ double response(StateVariableFilter::Mode mode, float cutoff, float resonance, d
 TEST(SVFTables, MatchTheConstructorFormula) {
     const StateVariableFilter filter(true);
 
-    EXPECT_EQ(filter.cutoffTableEntry(0), 482443);
-    EXPECT_EQ(filter.cutoffTableEntry(128), 2845005);
-    EXPECT_EQ(filter.cutoffTableEntry(255), 16546238);
+    EXPECT_EQ(filter.getCutoffTableEntry(0), 482443);
+    EXPECT_EQ(filter.getCutoffTableEntry(128), 2845005);
+    EXPECT_EQ(filter.getCutoffTableEntry(255), 16546238);
 }
 
 TEST(SVFTables, ExtendedResonanceStartsLowerThanStandard) {
@@ -56,22 +56,22 @@ TEST(SVFTables, ExtendedResonanceStartsLowerThanStandard) {
     const StateVariableFilter standard(false);
 
     // 0.5^1.5 against 0.5^0, both in Q24.
-    EXPECT_EQ(extended.dampingTableEntry(0), 5931641);
-    EXPECT_EQ(standard.dampingTableEntry(0), StateVariableFilter::kMax24);
+    EXPECT_EQ(extended.getDampingTableEntry(0), 5931641);
+    EXPECT_EQ(standard.getDampingTableEntry(0), StateVariableFilter::kMax24);
 
     // Damping falls as the control rises, which is what sharpens the filter.
-    EXPECT_LT(extended.dampingTableEntry(255), extended.dampingTableEntry(0));
+    EXPECT_LT(extended.getDampingTableEntry(255), extended.getDampingTableEntry(0));
 }
 
 TEST(SVFTables, CutoffBelowTheFloorUsesTheFirstEntry) {
     StateVariableFilter filter(true);
     filter.setCutoff(0.0f);
-    const int atZero = filter.cutoffCoefficient();
+    const int atZero = filter.getCutoffCoefficient();
 
     filter.setCutoff(StateVariableFilter::kMinimumCutoff / 2.0f);
 
-    EXPECT_EQ(filter.cutoffCoefficient(), atZero);
-    EXPECT_EQ(atZero, filter.cutoffTableEntry(0));
+    EXPECT_EQ(filter.getCutoffCoefficient(), atZero);
+    EXPECT_EQ(atZero, filter.getCutoffTableEntry(0));
 }
 
 TEST(SVFModes, BypassLeavesTheBufferUntouched) {
