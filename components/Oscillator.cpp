@@ -1,6 +1,7 @@
 #include "Oscillator.h"
 
 #include <cmath>
+#include <algorithm>
 #include <cstdlib>
 #include <mutex>
 #include <vector>
@@ -15,16 +16,18 @@ constexpr float kFullScale = 32767.0f;
 // Levels the engine passes per waveform. The square is quieter because it
 // carries more energy than a sine at the same peak.
 constexpr float kSineLevel = 0.3f;
-constexpr float kTriangleLevel = 0.3f;
+constexpr float kTriangleLevel = 0.4f;
 constexpr float kSawtoothLevel = 0.3f;
 constexpr float kSquareLevel = 0.2f;
-constexpr float kNoiseLevel = 0.3f;
+constexpr float kNoiseLevel = 0.4f;
 
 std::vector<short> gSine;
 std::vector<short> gTriangle;
 std::vector<short> gSawtooth;
 std::vector<short> gSquare;
-std::vector<short> gNoise;
+std::vector<short> gHQSawtooth;
+std::vector<short> gHQSquare;
+std::vector<int> gNoise;
 std::once_flag gTablesBuilt;
 
 // buf[i] = sin(i * frequency * 2pi / 44100) * level * 32767
@@ -86,7 +89,10 @@ void trianglewave(short *buffer, uint length, float frequency, float level) {
     }
 }
 
-void whitenoise(short *buffer, uint length, float level) {
+// The engine's ASwhitenoise writes ints. Its source of randomness is not
+// recoverable from the binary, so this is a local deterministic generator at
+// the same level.
+void whitenoise(int *buffer, uint length, float level) {
     const float amplitude = level * kFullScale;
     // Deterministic so tests and renders repeat. The engine's own source of
     // randomness is not recoverable from the binary.
@@ -95,11 +101,58 @@ void whitenoise(short *buffer, uint length, float level) {
         state = state * 1664525u + 1013904223u;
         const float value =
             static_cast<float>(static_cast<int>(state >> 8) % 2001 - 1000) / 1000.0f;
-        buffer[index] = static_cast<short>(value * amplitude);
+        buffer[index] = static_cast<int>(value * amplitude);
+    }
+}
+
+// Each HQ table is eight band-limited cycles, built once at GenerateWavetables.
+// A band is a literal sum of sines at amplitude 1/h up to kBandHarmonics[band]
+// — not an FFT. Playback never sums sines; it reads the baked table.
+// The engine writes the bands interleaved: band b of phase step i lives at
+// table[i * kBandCount + b].
+void buildBandLimited(std::vector<short> &table, int harmonicStep, float level) {
+    table.assign(Oscillator::kTableSize * Oscillator::kBandCount, 0);
+
+    std::vector<float> sineScratch(Oscillator::kTableSize);
+    for (uint index = 0; index < Oscillator::kTableSize; ++index) {
+        sineScratch[index] = std::sin(2.0f * 3.14159265358979f * static_cast<float>(index)
+                                      / static_cast<float>(Oscillator::kTableSize));
+    }
+
+    std::vector<float> accumulator(Oscillator::kTableSize);
+
+    for (uint band = 0; band < Oscillator::kBandCount; ++band) {
+        const int limit = Oscillator::kBandHarmonics[band];
+        std::fill(accumulator.begin(), accumulator.end(), 0.0f);
+
+        for (int harmonic = 1; harmonic < limit; harmonic += harmonicStep) {
+            const float amplitude = 1.0f / static_cast<float>(harmonic);
+            uint position = 0;
+            for (uint index = 0; index < Oscillator::kTableSize; ++index) {
+                accumulator[index] += amplitude * sineScratch[position % Oscillator::kTableSize];
+                position += static_cast<uint>(harmonic);
+            }
+        }
+
+        float peak = 0.0f;
+        for (const float value : accumulator) {
+            peak = std::max(peak, value);
+        }
+        if (peak <= 0.0f) {
+            peak = 1.0f;
+        }
+
+        for (uint index = 0; index < Oscillator::kTableSize; ++index) {
+            const float normalised = -accumulator[index] / peak;
+            table[index * Oscillator::kBandCount + band] =
+                static_cast<short>(normalised * level * kFullScale);
+        }
     }
 }
 
 } // namespace
+
+const int Oscillator::kBandHarmonics[Oscillator::kBandCount] = {512, 337, 169, 84, 42, 21, 10, 6};
 
 void Oscillator::buildTables() {
     std::call_once(gTablesBuilt, [] {
@@ -108,12 +161,18 @@ void Oscillator::buildTables() {
         gSawtooth.resize(kTableSize);
         gSquare.resize(kTableSize);
         gNoise.resize(kNoiseTableSize);
+        gHQSawtooth.resize(kTableSize * kBandCount);
+        gHQSquare.resize(kTableSize * kBandCount);
 
         sinewave(gSine.data(), kTableSize, kTableFrequency, kSineLevel);
         trianglewave(gTriangle.data(), kTableSize, kTableFrequency, kTriangleLevel);
         sawtooth(gSawtooth.data(), kTableSize, kSawtoothLevel);
         squarewave(gSquare.data(), kTableSize, kTableFrequency, kSquareLevel);
         whitenoise(gNoise.data(), kNoiseTableSize, kNoiseLevel);
+
+        // Sawtooth keeps every harmonic; the square keeps the odd ones.
+        buildBandLimited(gHQSawtooth, 1, kSawtoothLevel);
+        buildBandLimited(gHQSquare, 2, kSquareLevel);
     });
 }
 
@@ -135,9 +194,36 @@ const short *Oscillator::table(Type type) {
     }
 }
 
-const short *Oscillator::noiseTable() {
+const int *Oscillator::noiseTable() {
     buildTables();
     return gNoise.data();
+}
+
+const short *Oscillator::bandLimitedTable(Type type) {
+    buildTables();
+    switch (type) {
+    case Type::SawtoothHQ:
+        return gHQSawtooth.data();
+    case Type::SquareHQ:
+        return gHQSquare.data();
+    default:
+        return nullptr;
+    }
+}
+
+// Derived, not read from the engine: pick the widest band whose top harmonic
+// still fits below Nyquist at this pitch.
+uint Oscillator::bandForFrequency(float hertz) {
+    if (!(hertz > 0.0f)) {
+        return 0;
+    }
+    const float nyquist = kSampleRate * 0.5f;
+    for (uint band = 0; band < kBandCount; ++band) {
+        if (static_cast<float>(kBandHarmonics[band]) * hertz <= nyquist) {
+            return band;
+        }
+    }
+    return kBandCount - 1;
 }
 
 Oscillator::Oscillator() {
@@ -147,6 +233,7 @@ Oscillator::Oscillator() {
 void Oscillator::setType(Type type) {
     type_ = type;
     table_ = table(type);
+    bandTable_ = bandLimitedTable(type);
 }
 
 void Oscillator::setFrequency(float hertz) {
@@ -155,11 +242,12 @@ void Oscillator::setFrequency(float hertz) {
     const float cycle = static_cast<float>(kTableSize << kFractionBits);
     const float increment = hertz * cycle / kSampleRate;
     phaseIncrement_ = static_cast<uint>(increment < 0.0f ? 0.0f : increment);
+    band_ = bandForFrequency(hertz);
 }
 
 void Oscillator::generate(int *buffer, uint numSamples) {
     if (type_ == Type::Noise) {
-        const short *noise = noiseTable();
+        const int *noise = noiseTable();
         for (uint index = 0; index < numSamples; ++index) {
             buffer[index] = static_cast<int>(static_cast<float>(noise[noiseIndex_]) * level_);
             noiseIndex_ = (noiseIndex_ + 1) % kNoiseTableSize;
@@ -180,8 +268,13 @@ void Oscillator::generate(int *buffer, uint numSamples) {
         const uint next = (position + 1) & (kTableSize - 1);
         const int fraction = static_cast<int>(phase_ & ((1u << kFractionBits) - 1));
 
-        const int current = table_[position];
-        const int difference = table_[next] - current;
+        const int current = bandTable_ != nullptr
+                                ? bandTable_[position * kBandCount + band_]
+                                : table_[position];
+        const int following = bandTable_ != nullptr
+                                  ? bandTable_[next * kBandCount + band_]
+                                  : table_[next];
+        const int difference = following - current;
         const int interpolated = current + ((difference * fraction) >> kFractionBits);
 
         buffer[index] = static_cast<int>(static_cast<float>(interpolated) * level_);

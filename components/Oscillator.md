@@ -1,4 +1,4 @@
-# Oscillator — reconstruction notes, standard quality path
+# Oscillator — reconstruction notes
 
 Source: `libcaustic.so`, ARMv7. The oscillator SubSynth builds two of.
 
@@ -33,12 +33,17 @@ Each generator takes a frequency and a level:
 squarewave(table, 4096, 10.7666f, 0.2f)
 sinewave  (table, 4096, 10.7666f, 0.3f)
 sawtooth  (table, 4096, 10.7666f, 0.3f)
-trianglewave(table, 4096, 10.7666f, 0.3f)
+trianglewave(table, 4096, 10.7666f, 0.4f)
+ASwhitenoise(table, 22050, 0.4f)
 ```
 
 `10.7666` is `44100 / 4096`, so exactly one cycle lands in the table. The level
-is multiplied by `32767`, giving peaks of 9830 for everything except the square
-at 6553.
+is multiplied by `32767`, giving peaks of 9830 for the sine and sawtooth, 6553
+for the square, and 13106 for the triangle.
+
+The noise table is separate: `0x15888` bytes is 22050 **ints**, half a second,
+written by `ASwhitenoise(int*, unsigned int, float)` at level 0.4 — not shorts,
+and not one second.
 
 `sinewave` is `sin(i * frequency * 2π / 44100) * level * 32767`, computed in
 double. The other three are **not band limited**: the sawtooth is a bare
@@ -100,12 +105,78 @@ its source of randomness is not recoverable from the binary, so this component
 uses a deterministic generator at the same level. The waveform is different; the
 character and amplitude are not.
 
+## Band-limited tables
+
+The two HQ tables are `0x10000` bytes each, 32768 shorts, which is
+`8 * 4096` — eight band-limited variants of one cycle. The harmonic limit per
+band is a `.rodata` array at `0x270198`:
+
+```
+512, 337, 169, 84, 42, 21, 10, 6
+```
+
+A naive saw or square has harmonics that go on forever. At high pitch those
+partials sit above Nyquist (22050 Hz at this engine's rate) and fold back as
+wrong notes — aliasing. HQ avoids that by baking eight copies of the same
+cycle, each poorer in overtones, and playing the richest copy whose leftover
+harmonics still fit.
+
+Each copy **is a sum of sines**, and the builder adds them one by one. There is
+no FFT and no closed form. For each band, harmonic `h` adds
+`(1/h) * sine[(i * h) mod 4096]` into a 4096-float scratch, stepping `h` by 1
+for the sawtooth and by 2 for the square, so the square keeps only odd
+harmonics. Band 0 of the sawtooth therefore walks `h = 1 .. 511` — hundreds of
+sines × 4096 samples. That is cheap only because `GenerateWavetables` runs
+once; `GenerateSignalHQ` never sums sines. It reads the baked table.
+
+The band is then normalised against its own peak, **negated**, and scaled by
+the same level as the plain table — 0.3 for the sawtooth, 0.2 for the square.
+
+The eight bands are stored **interleaved**, not one after another. The builder
+writes with a 16-byte stride, and the inner loop of `GenerateSignalHQ` reads
+
+```
+add r0, r4, r0, lsl #3        ; band + index * 8
+lsl r0, r0, #1                ; as shorts
+ldrh  r4, [r3, r0]
+```
+
+so element `b` of phase step `i` is at `table[i * 8 + b]`. All eight bands of
+one phase step sit in the same cache line, which is the point.
+
+`GenerateSignal` picks HQ or LQ from the flag at `+0x34`, which
+`SetOscillatorType` sets only for types 3 and 5.
+
+Playback still has to choose which of the eight copies to read. The rule in
+this component — widest band whose top harmonic is still ≤ Nyquist — is
+**derived, not read**. The engine has a picker in the `GenerateSignalHQ`
+prologue, mixed with state this component does not model. The tables, the
+caps, and the interleaved layout were read from the binary; the function that
+maps a pitch onto a band index was not.
+
+## Derived rather than read
+
+Two things in this component are derivations, marked here so they are not
+mistaken for readings.
+
+The phase increment for a frequency comes from the index arithmetic — a cycle
+is `4096 << 12` units, so `increment = 2^24 * hertz / 44100` — not from the
+engine's float setup path, which is entangled with `ControlVoltage`.
+
+The band chosen for a pitch is likewise derived: the widest band whose top
+harmonic still fits below Nyquist. The engine computes its index somewhere in
+the `GenerateSignalHQ` prologue, from state this component does not model. The
+selection rule here is the one the harmonic limits imply, and it behaves
+correctly, but it has not been read out of the binary.
+
+The noise source is a local deterministic generator, because the engine's
+randomness cannot be recovered from a binary. Only its length and level match.
+
 ## Not in this pass
 
-`GenerateSignalHQ` and the band-limited tables, the modulation modes selected by
-`SetModulationMode`, the custom wavetables, and everything reached through
-`ControlVoltage` — pitch modulation, sync, the per-voice fields. Those are the
-second patch.
+The modulation modes selected by `SetModulationMode`, the custom wavetables at
+type 7 and 8, and everything reached through `ControlVoltage` — pitch
+modulation, sync, the per-voice fields.
 
 ## Measured
 
@@ -113,8 +184,19 @@ second patch.
 sine      [0]=0  [1024]=9830  [2048]=0  [3072]=-9830
 sawtooth  [0]=-9830  [2048]=0  [4095]=9825
 square    [0]=-6553  [2047]=-6553  [2048]=6553
-triangle  [0]=0  [1024]=9830  [2048]=9  [3072]=-9820
+triangle  [0]=0  [1024]=13106  [2048]=9  [3072]=-13096
 ```
 
 A 441 Hz sine gives 440 rising zero crossings in one second, peak 9830, and an
 RMS to peak ratio of 0.707.
+
+A 2 kHz sawtooth, measured at frequencies that are not its harmonics:
+
+```
+          1400 Hz   3100 Hz
+plain        48        36
+band limited  0         0
+```
+
+and a 440 Hz band-limited square has no second harmonic, with its third at a
+third of the fundamental.
