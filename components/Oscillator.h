@@ -7,8 +7,8 @@
 // Oscillator::GenerateSignalLQ in libcaustic.so (ARMv7). See
 // components/Oscillator.md for the evidence.
 //
-// The band-limited HQ tables and the modulation modes are a separate pass and
-// are not implemented here.
+// Includes the band-limited HQ tables. The modulation modes and everything
+// reached through ControlVoltage remain a separate pass.
 
 using uint = unsigned int;
 
@@ -38,8 +38,15 @@ public:
     // The rate the engine hardcodes, here and in the ADSR.
     static constexpr float kSampleRate = 44100.0f;
 
-    // Noise is one second of samples rather than one cycle.
-    static constexpr uint kNoiseTableSize = 44100;
+    // Noise is a half second of ints rather than one cycle of shorts.
+    static constexpr uint kNoiseTableSize = 22050;
+
+    // An HQ table holds this many band-limited variants of one cycle,
+    // interleaved so that all bands of one phase step sit together.
+    static constexpr uint kBandCount = 8;
+
+    // Highest harmonic kept in each band, lowest pitch first.
+    static const int kBandHarmonics[kBandCount];
 
     Oscillator();
 
@@ -62,13 +69,22 @@ public:
 
     // The shared tables, built once and reused. Exposed for tests.
     static const short *table(Type type);
-    static const short *noiseTable();
+    static const int *noiseTable();
+
+    // Band-limited table for a type, or nullptr when the type has none.
+    static const short *bandLimitedTable(Type type);
+
+    // Band the engine would read at this frequency, widest first.
+    static uint bandForFrequency(float hertz);
+    uint band() const { return band_; }
 
 private:
     static void buildTables();
 
     Type type_ = Type::Sine;
     const short *table_ = nullptr;
+    const short *bandTable_ = nullptr;
+    uint band_ = 0;
     float level_ = 1.0f;
     uint phase_ = 0;
     uint phaseIncrement_ = 0;

@@ -3,12 +3,14 @@
 #include <gtest/gtest.h>
 
 #include <cmath>
+#include <numbers>
 #include <vector>
 
 namespace {
 
 constexpr int kSinePeak = 9830;   // 0.3 * 32767
-constexpr int kSquarePeak = 6553; // 0.2 * 32767
+constexpr int kSquarePeak = 6553;    // 0.2 * 32767
+constexpr int kTrianglePeak = 13106; // 0.4 * 32767
 
 int countRisingZeroCrossings(const std::vector<int> &samples) {
     int crossings = 0;
@@ -63,19 +65,40 @@ TEST(OscillatorTables, SquareFlipsAtTheHalfPeriod) {
 TEST(OscillatorTables, TrianglePeaksAtTheQuarterPoints) {
     const short *triangle = Oscillator::table(Oscillator::Type::Triangle);
 
+    // The triangle is built at level 0.4, unlike the 0.3 of its siblings.
     EXPECT_EQ(triangle[0], 0);
-    EXPECT_EQ(triangle[Oscillator::kTableSize / 4], kSinePeak);
+    EXPECT_EQ(triangle[Oscillator::kTableSize / 4], kTrianglePeak);
     EXPECT_LT(std::abs(triangle[Oscillator::kTableSize / 2]), 32);
-    EXPECT_LT(triangle[3 * Oscillator::kTableSize / 4], -kSinePeak + 32);
+    EXPECT_LT(triangle[3 * Oscillator::kTableSize / 4], -kTrianglePeak + 32);
 }
 
-TEST(OscillatorTables, HQTypesStillResolveToTheirPlainTable) {
-    // The band-limited tables are a later pass; the HQ types share the plain
-    // ones for now rather than returning nothing.
-    EXPECT_EQ(Oscillator::table(Oscillator::Type::SawtoothHQ),
-              Oscillator::table(Oscillator::Type::Sawtooth));
-    EXPECT_EQ(Oscillator::table(Oscillator::Type::SquareHQ),
-              Oscillator::table(Oscillator::Type::Square));
+TEST(OscillatorBands, HQTypesHaveTheirOwnInterleavedTable) {
+    EXPECT_NE(Oscillator::bandLimitedTable(Oscillator::Type::SawtoothHQ), nullptr);
+    EXPECT_NE(Oscillator::bandLimitedTable(Oscillator::Type::SquareHQ), nullptr);
+    EXPECT_EQ(Oscillator::bandLimitedTable(Oscillator::Type::Sine), nullptr);
+}
+
+TEST(OscillatorBands, HarmonicLimitsHalveAcrossTheBands) {
+    const int expected[] = {512, 337, 169, 84, 42, 21, 10, 6};
+    for (unsigned int band = 0; band < Oscillator::kBandCount; ++band) {
+        EXPECT_EQ(Oscillator::kBandHarmonics[band], expected[band]);
+    }
+}
+
+TEST(OscillatorBands, HigherPitchesSelectNarrowerBands) {
+    EXPECT_LT(Oscillator::bandForFrequency(110.0f), Oscillator::bandForFrequency(2000.0f));
+    EXPECT_EQ(Oscillator::bandForFrequency(8000.0f), Oscillator::kBandCount - 1);
+
+    // Whatever band is chosen, its top harmonic stays below Nyquist, unless
+    // the pitch is so high that even the narrowest band cannot manage it.
+    for (const float hertz : {55.0f, 220.0f, 440.0f, 1000.0f, 4000.0f}) {
+        const unsigned int band = Oscillator::bandForFrequency(hertz);
+        if (band == Oscillator::kBandCount - 1) {
+            continue;
+        }
+        EXPECT_LE(static_cast<float>(Oscillator::kBandHarmonics[band]) * hertz,
+                  Oscillator::kSampleRate * 0.5f);
+    }
 }
 
 TEST(OscillatorPlayback, RunsAtTheRequestedFrequency) {
@@ -138,8 +161,9 @@ TEST(OscillatorPlayback, NoiseIsBroadbandAndBounded) {
         sum += value;
     }
 
+    // Noise is built at level 0.4, like the triangle.
     EXPECT_GT(peak, 1000);
-    EXPECT_LE(peak, kSinePeak);
+    EXPECT_LE(peak, kTrianglePeak);
 
     // Roughly zero mean, unlike any of the cycle tables at a fixed phase.
     const double mean = static_cast<double>(sum) / static_cast<double>(samples.size());
@@ -158,4 +182,52 @@ TEST(OscillatorPlayback, InterpolatesBetweenTableEntries) {
         }
     }
     EXPECT_TRUE(moved);
+}
+
+
+namespace {
+
+// Magnitude at one frequency, by direct correlation.
+double magnitudeAt(const std::vector<int> &samples, double hertz) {
+    double real = 0.0;
+    double imaginary = 0.0;
+    for (std::size_t index = 0; index < samples.size(); ++index) {
+        const double phase = 2.0 * std::numbers::pi * hertz * static_cast<double>(index)
+                             / static_cast<double>(Oscillator::kSampleRate);
+        real += samples[index] * std::cos(phase);
+        imaginary += samples[index] * std::sin(phase);
+    }
+    return 2.0 * std::sqrt(real * real + imaginary * imaginary)
+           / static_cast<double>(samples.size());
+}
+
+} // namespace
+
+TEST(OscillatorBands, BandLimitingRemovesAliasing) {
+    const auto naive = render(Oscillator::Type::Sawtooth, 2000.0f, 44100);
+    const auto limited = render(Oscillator::Type::SawtoothHQ, 2000.0f, 44100);
+
+    // Both keep the fundamental.
+    EXPECT_GT(magnitudeAt(naive, 2000.0), 1000.0);
+    EXPECT_GT(magnitudeAt(limited, 2000.0), 1000.0);
+
+    // Only the naive table puts energy at frequencies that are not harmonics.
+    EXPECT_GT(magnitudeAt(naive, 1400.0), 10.0);
+    EXPECT_LT(magnitudeAt(limited, 1400.0), 1.0);
+    EXPECT_GT(magnitudeAt(naive, 3100.0), 10.0);
+    EXPECT_LT(magnitudeAt(limited, 3100.0), 1.0);
+}
+
+TEST(OscillatorBands, BandLimitedSquareKeepsOnlyOddHarmonics) {
+    const auto samples = render(Oscillator::Type::SquareHQ, 440.0f, 44100);
+
+    const double first = magnitudeAt(samples, 440.0);
+    const double second = magnitudeAt(samples, 880.0);
+    const double third = magnitudeAt(samples, 1320.0);
+
+    EXPECT_GT(first, 1000.0);
+    EXPECT_LT(second, 1.0);
+
+    // A square falls off as 1/h across its odd harmonics.
+    EXPECT_NEAR(third, first / 3.0, first * 0.05);
 }
