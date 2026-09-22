@@ -9,6 +9,8 @@
 //
 // Everything runs in Q24 fixed point, the same domain the ADSR uses.
 
+#include "ControlVoltage.h"
+
 using uint = unsigned int;
 
 class StateVariableFilter {
@@ -49,6 +51,11 @@ public:
 
     // Applied to the input before it enters the integrators.
     void setInputGain(float gain);
+
+    // Set the cutoff from a base position scaled by a voice's control voltage,
+    // the way the engine folds ControlVoltage's field at 0x58 into its cutoff
+    // base once per control block.
+    void setCutoffWithVoltage(float base, const ControlVoltage &voltage);
 
     // Filter a block in place. Samples are Q24. numChannels of 2 means the
     // buffer is interleaved stereo and both channels are filtered with a
