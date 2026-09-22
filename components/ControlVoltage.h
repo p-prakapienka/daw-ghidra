@@ -8,8 +8,9 @@
 // ControlVoltage exports no methods, so its layout was recovered from the
 // places that read it — FixedPointSVFilter::ProcessCV, FloatSVFilter::ProcessCV,
 // Oscillator::GenerateSignal{LQ,HQ}, SuperOscillator::Trigger and
-// GenerateStereoSignal — and from the block in SubSynth::SubSynth that
-// initialises one per voice. See components/ControlVoltage.md.
+// GenerateStereoSignal — from the block in SubSynth::SubSynth that initialises
+// one per voice, and from SubSynth::PlayChannel, which fills it on note-on.
+// See components/ControlVoltage.md.
 //
 // Field names follow the evidence. Where a field's role is established it is
 // named; where only its offset, width and default are known it keeps its
@@ -19,21 +20,32 @@ struct ControlVoltage {
     // Size and stride come from the per-voice loop in SubSynth's constructor.
     static constexpr std::size_t kSize = 0x60;
 
-    // 0x00: flag byte. The constructor clears bits 0, 1 and 2 and leaves the
-    // rest of the byte alone, so other bits are set elsewhere.
+    // Pitch fields hold frequency in hertz multiplied by this, so they are
+    // Q12 fixed-point hertz stored as floats.
+    static constexpr float kPitchScale = 4096.0f;
+
+    // Keyboard tracking pivots here: a note at this frequency leaves the
+    // filter cutoff unchanged whatever the tracking amount.
+    static constexpr float kTrackingPivotHertz = 500.0f;
+
+    // 0x00: flag byte. The constructor clears bits 0..2. Note-on sets bits 0
+    // and 1 and copies bit 2 of the key event's flag word into bit 2.
     std::uint8_t flags;
     std::uint8_t pad01[3];
 
-    // 0x04: read by both oscillator paths and by SuperOscillator.
+    // 0x04: zeroed on note-on, then read by both oscillator paths and by
+    // SuperOscillator. Runtime state owned by the oscillator.
     float field04;
 
+    // 0x08: zeroed on note-on.
     std::int32_t field08;
 
     // 0x0C on the device: pointer to a per-sample modulation array, indexed by
-    // the sample offset within the block. The filter dereferences it once per
-    // control block; the oscillator reads it on every sample.
+    // the sample offset within the block. Null on note-on; the filter
+    // dereferences it once per control block, the oscillator every sample.
     const std::int32_t *modulation;
 
+    // 0x10, 0x14: zeroed on note-on unless the note is held legato.
     std::int32_t field10;
     std::int32_t field14;
     std::int32_t field18;
@@ -41,47 +53,66 @@ struct ControlVoltage {
     // 0x1C: pointer, read only by the standard-quality oscillator.
     const void *field1C;
 
-    std::int32_t field20;
+    // 0x20: the note frequency in Q12 hertz as an unsigned integer.
+    std::uint32_t frequencyQ12;
 
-    // 0x24, 0x28, 0x2C: floats read by both oscillator paths. 0x28 is read
-    // twice per call and is multiplied by the caller's float argument, so it
-    // carries pitch.
-    float field24;
+    // 0x24, 0x28, 0x2C: pitch in Q12 hertz. Without glide all three are set
+    // to the new note. With glide the current value is left to slide towards
+    // the target, which is why the oscillator reads 0x28 twice per call.
+    float glideStartPitch;
     float pitch;
-    float field2C;
+    float targetPitch;
 
-    // 0x30: pointer. Non-zero sends the oscillator down a different path, and
-    // SuperOscillator reads it in both Trigger and GenerateStereoSignal.
-    const void *field30;
+    // 0x30: glide length in samples. Zero means no glide, and the oscillator
+    // takes a different path when it is non-zero. Not a pointer.
+    std::uint32_t glideSamples;
 
     std::int32_t field34;
 
     // 0x38: the one integer the constructor sets to something other than zero.
     std::int32_t field38;
 
-    std::int32_t field3C;
+    // 0x3C: the key event's note identifier.
+    std::int32_t noteId;
 
+    // 0x40, 0x44: zeroed on note-on.
     float field40;
     float field44;
+
+    // 0x48, 0x4C: both copied from the same machine-level float on note-on.
     float field48;
     float field4C;
 
-    // 0x50: read several times per call by the oscillator.
+    // 0x50: copied from a second machine-level float on note-on; read several
+    // times per call by the oscillator.
     float field50;
 
-    // 0x54: read by SuperOscillator::Trigger.
-    float field54;
+    // 0x54: the note frequency in hertz.
+    float frequencyHertz;
 
-    // 0x58: multiplied into the filter's cutoff base once per control block.
-    // Defaults to 1.0, so an untouched voice leaves the cutoff alone.
+    // 0x58: filter keyboard tracking, folded into the filter's cutoff base once
+    // per control block. 1.0 at the pivot frequency or with tracking off.
     float filterCutoffScale;
 
-    // 0x5C: initialised to 1.0 alongside 0x58 and not read by anything
-    // reconstructed so far.
+    // 0x5C: a float copied from the key event on note-on. Defaults to 1.0,
+    // which fits velocity, but that reading is a hypothesis.
     float field5C;
 
     // Defaults exactly as SubSynth's constructor leaves them.
     static ControlVoltage makeDefault();
+
+    // Reproduce SubSynth::PlayChannel's note-on writes for a note with no
+    // glide. keyboardTracking is the machine's filter tracking amount, and
+    // eventValue is the float the engine copies from the key event.
+    void noteOn(float frequencyHz, int note, float keyboardTracking, float eventValue);
+
+    // Retarget the pitch fields for a glide of the given length, leaving the
+    // current pitch where it is so it can slide.
+    void beginGlide(float targetFrequencyHz, std::uint32_t lengthSamples);
+
+    // The keyboard tracking curve on its own, for tests and for hosts that
+    // want to drive the filter without a full note-on.
+    static float trackingScale(float frequencyHz, float keyboardTracking);
 };
 
 // The engine is 32-bit, so its pointers are four bytes and the struct is
@@ -100,20 +131,20 @@ struct Engine {
     std::int32_t field14;
     std::int32_t field18;
     std::uint32_t field1C;
-    std::int32_t field20;
-    float field24;
+    std::uint32_t frequencyQ12;
+    float glideStartPitch;
     float pitch;
-    float field2C;
-    std::uint32_t field30;
+    float targetPitch;
+    std::uint32_t glideSamples;
     std::int32_t field34;
     std::int32_t field38;
-    std::int32_t field3C;
+    std::int32_t noteId;
     float field40;
     float field44;
     float field48;
     float field4C;
     float field50;
-    float field54;
+    float frequencyHertz;
     float filterCutoffScale;
     float field5C;
 };
@@ -123,13 +154,16 @@ static_assert(sizeof(Engine) == ControlVoltage::kSize,
 static_assert(offsetof(Engine, field04) == 0x04, "");
 static_assert(offsetof(Engine, modulation) == 0x0C, "");
 static_assert(offsetof(Engine, field1C) == 0x1C, "");
-static_assert(offsetof(Engine, field24) == 0x24, "");
+static_assert(offsetof(Engine, frequencyQ12) == 0x20, "");
+static_assert(offsetof(Engine, glideStartPitch) == 0x24, "");
 static_assert(offsetof(Engine, pitch) == 0x28, "");
-static_assert(offsetof(Engine, field2C) == 0x2C, "");
-static_assert(offsetof(Engine, field30) == 0x30, "");
+static_assert(offsetof(Engine, targetPitch) == 0x2C, "");
+static_assert(offsetof(Engine, glideSamples) == 0x30, "");
 static_assert(offsetof(Engine, field38) == 0x38, "");
+static_assert(offsetof(Engine, noteId) == 0x3C, "");
+static_assert(offsetof(Engine, field48) == 0x48, "");
 static_assert(offsetof(Engine, field50) == 0x50, "");
-static_assert(offsetof(Engine, field54) == 0x54, "");
+static_assert(offsetof(Engine, frequencyHertz) == 0x54, "");
 static_assert(offsetof(Engine, filterCutoffScale) == 0x58, "");
 static_assert(offsetof(Engine, field5C) == 0x5C, "");
 
