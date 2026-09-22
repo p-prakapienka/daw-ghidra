@@ -64,6 +64,10 @@ void StateVariableFilter::setResonance(float resonance) {
     dampingCoefficient_ = dampingTable_[index];
 }
 
+void StateVariableFilter::setCutoffWithVoltage(float base, const ControlVoltage &voltage) {
+    setCutoff(base * voltage.filterCutoffScale);
+}
+
 void StateVariableFilter::setInputGain(float gain) {
     inputGain_ = static_cast<int>(std::clamp(gain, 0.0f, 1.0f) * kQ24Scale);
 }
