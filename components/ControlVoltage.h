@@ -18,50 +18,134 @@
 // offset as its name rather than a guess.
 
 struct ControlVoltage {
+    // Size and stride come from the per-voice loop in SubSynth's constructor.
     static constexpr std::size_t kSize = 0x60;
+
+    // Pitch fields hold frequency in hertz multiplied by this, so they are
+    // Q12 fixed-point hertz stored as floats.
     static constexpr float kPitchScale = 4096.0f;
+
+    // Keyboard tracking pivots here: a note at this frequency leaves the
+    // filter cutoff unchanged whatever the tracking amount.
     static constexpr float kTrackingPivotHertz = 500.0f;
+
+    // 0x00: flag byte. Bit 0 is voice-active, cleared by ProcessChannel once
+    // the envelope reports done. Bit 1 is the gate, set on note-on and tested
+    // by the filter to choose which envelope position to use. Bit 2 is copied
+    // from the key event's flag word on note-on.
     static constexpr std::uint8_t kActiveBit = 0x01;
     static constexpr std::uint8_t kGateBit = 0x02;
 
     std::uint8_t flags;
     std::uint8_t pad01[3];
+
+    // 0x04: samples since note-on. Zeroed on note-on, advanced by every
+    // processed block.
     std::int32_t samplesSinceNoteOn;
+
+    // 0x08: the envelope position while the gate is open. Advanced by every
+    // block; the filter passes it to the envelope as the position argument.
     std::int32_t envelopePosition;
+
+    // 0x0C: the envelope position after note-off. Advanced only while the
+    // gate is closed, and passed to IsDone to decide when the voice stops.
     std::int32_t releasePosition;
+
+    // 0x10, 0x14: the 24-bit phase accumulator of oscillator 0 and 1. Each
+    // oscillator call reads and writes back its own slot; note-on zeroes them
+    // unless the note is held legato, which keeps the waveform continuous.
     std::uint32_t phase[2];
     std::int32_t field18;
+
+    // 0x1C: pointer, read only by the standard-quality oscillator.
     const void *field1C;
+
+    // 0x20: the note frequency in Q12 hertz as an unsigned integer.
     std::uint32_t frequencyQ12;
+
+    // 0x24, 0x28, 0x2C: pitch in Q12 hertz — glide start, glide target and the
+    // current value. Note-on without glide writes all three equal. With glide
+    // the start takes the current value and the target the new note, and the
+    // oscillator interpolates between them once per block, writing the
+    // result to 0x2C. The interpolation is linear in hertz, not in pitch.
     float glideStartPitch;
     float targetPitch;
     float currentPitch;
+
+    // 0x30: glide length in samples. Non-zero makes the oscillator
+    // interpolate; it clears this to zero itself when the glide completes.
     std::uint32_t glideSamples;
+
     std::int32_t field34;
+
+    // 0x38: the one integer the constructor sets to something other than zero.
     std::int32_t field38;
+
+    // 0x3C: the key event's note identifier.
     std::int32_t noteId;
+
+    // 0x40, 0x44: zeroed on note-on.
     float field40;
     float field44;
+
+    // 0x48, 0x4C: a per-oscillator pitch sweep. Both start from the same
+    // machine-level value on note-on; the oscillator multiplies its increment
+    // by (1 + sweep) and then multiplies the sweep by 0x50, every sample.
     float pitchSweep[2];
+
+    // 0x50: the per-sample decay factor applied to both sweeps.
     float pitchSweepDecay;
+
+    // 0x54: the note frequency in hertz.
     float frequencyHertz;
+
+    // 0x58: filter keyboard tracking, folded into the filter's cutoff base once
+    // per control block. 1.0 at the pivot frequency or with tracking off.
     float filterCutoffScale;
+
+    // 0x5C: a float copied from the key event on note-on. Defaults to 1.0,
+    // which fits velocity, but that reading is a hypothesis.
     float field5C;
 
+    // Defaults exactly as SubSynth's constructor leaves them.
     static ControlVoltage makeDefault();
+
+    // Reproduce SubSynth::PlayChannel's note-on writes for a note with no
+    // glide. keyboardTracking is the machine's filter tracking amount, and
+    // eventValue is the float the engine copies from the key event. The sweep
+    // values are the machine-level floats the engine copies into 0x48/0x4C
+    // and 0x50; zero sweep leaves the pitch alone.
     void noteOn(float frequencyHz, int note, float keyboardTracking, float eventValue,
                 float sweep = 0.0f, float sweepDecay = 1.0f);
+
+    // Retarget the pitch fields for a glide of the given length: the start
+    // takes the current pitch, the target the new note.
     void beginGlide(float targetFrequencyHz, std::uint32_t lengthSamples);
+
+    // The keyboard tracking curve on its own, for tests and for hosts that
+    // want to drive the filter without a full note-on.
     static float trackingScale(float frequencyHz, float keyboardTracking);
+
     bool isActive() const { return (flags & kActiveBit) != 0; }
     bool isGateOpen() const { return (flags & kGateBit) != 0; }
+
+    // Close the gate. Release time starts counting from the next block.
     void noteOff() { flags = static_cast<std::uint8_t>(flags & ~kGateBit); }
+
+    // Reproduce the end of SubSynth::ProcessChannel: both note counters move
+    // every block, the release counter only while the gate is closed.
     void advance(std::uint32_t numSamples);
+
+    // The position the filter hands to its envelope for this block.
     std::int32_t envelopePositionForGate() const {
         return isGateOpen() ? envelopePosition : releasePosition;
     }
 };
 
+// The engine is 32-bit, so its pointers are four bytes and the struct is
+// exactly 0x60. This mirror exists to hold the recovered offsets in code that a
+// compiler checks, on any host. The usable struct above keeps native pointers
+// and therefore a different size.
 namespace controlVoltageLayout {
 
 struct Engine {
