@@ -63,15 +63,19 @@ TEST(SVFTables, ExtendedResonanceStartsLowerThanStandard) {
     EXPECT_LT(extended.getDampingTableEntry(255), extended.getDampingTableEntry(0));
 }
 
-TEST(SVFTables, CutoffBelowTheFloorUsesTheFirstEntry) {
+TEST(SVFTables, CutoffBelowTheFloorIsPinnedToEntryTwelve) {
     StateVariableFilter filter(true);
     filter.setCutoff(0.0f);
     const int atZero = filter.getCutoffCoefficient();
 
     filter.setCutoff(StateVariableFilter::kMinimumCutoff / 2.0f);
-
     EXPECT_EQ(filter.getCutoffCoefficient(), atZero);
-    EXPECT_EQ(atZero, filter.getCutoffTableEntry(0));
+
+    // 0.05 * 255 truncates to 12, so the floor is the same entry the
+    // threshold itself selects rather than a special case.
+    EXPECT_EQ(atZero, filter.getCutoffTableEntry(StateVariableFilter::kMinimumCutoffIndex));
+    filter.setCutoff(StateVariableFilter::kMinimumCutoff);
+    EXPECT_EQ(filter.getCutoffCoefficient(), atZero);
 }
 
 TEST(SVFModes, BypassLeavesTheBufferUntouched) {
@@ -168,4 +172,174 @@ TEST(SVFChannels, ResetClearsTheIntegrators) {
     for (const int value : silence) {
         EXPECT_EQ(value, 0);
     }
+}
+
+
+namespace {
+
+ADSR sustainedEnvelope(float sustain) {
+    ADSR envelope;
+    envelope.setAttackSeconds(0.0f);
+    envelope.setDecaySeconds(0.0f);
+    envelope.setSustainLevel(sustain);
+    envelope.setReleaseSeconds(0.1f);
+    envelope.OnParamModified();
+    return envelope;
+}
+
+ControlVoltage heldVoice(float hertz) {
+    ControlVoltage voltage = ControlVoltage::makeDefault();
+    voltage.noteOn(hertz, 60, 0.0f, 1.0f);
+    // Past the attack and decay minimums so the envelope sits at sustain.
+    voltage.advance(1000);
+    return voltage;
+}
+
+} // namespace
+
+TEST(SVFControlBlock, EnvelopeAtFullSustainReproducesTheBaseCutoff) {
+    ADSR envelope = sustainedEnvelope(1.0f);
+    ControlVoltage voltage = heldVoice(500.0f);
+
+    StateVariableFilter filter(true);
+    filter.setCutoffBase(0.6f);
+    filter.setResonanceBase(0.0f);
+    filter.updateControlBlock({&voltage, &envelope, nullptr}, 0);
+
+    StateVariableFilter plain(true);
+    plain.setCutoff(0.6f);
+
+    EXPECT_EQ(filter.getCutoffCoefficient(), plain.getCutoffCoefficient());
+}
+
+TEST(SVFControlBlock, EnvelopeScalesTheCutoff) {
+    ADSR envelope = sustainedEnvelope(0.5f);
+    ControlVoltage voltage = heldVoice(500.0f);
+
+    StateVariableFilter filter(true);
+    filter.setCutoffBase(0.8f);
+    filter.updateControlBlock({&voltage, &envelope, nullptr}, 0);
+
+    StateVariableFilter plain(true);
+    plain.setCutoff(0.4f);
+
+    // 0.5 * 32767 / 32767 is a hair under 0.5, so allow one table step.
+    EXPECT_NEAR(filter.getCutoffCoefficient(), plain.getCutoffCoefficient(),
+                plain.getCutoffCoefficient() / 40);
+}
+
+TEST(SVFControlBlock, InvertFlipsTheEnvelope) {
+    ADSR envelope = sustainedEnvelope(1.0f);
+    ControlVoltage voltage = heldVoice(500.0f);
+
+    StateVariableFilter filter(true);
+    filter.setCutoffBase(0.8f);
+    filter.setInvertEnvelope(true);
+    filter.updateControlBlock({&voltage, &envelope, nullptr}, 0);
+
+    // 1 - 1 = 0, below the floor.
+    EXPECT_EQ(filter.getCutoffCoefficient(),
+              filter.getCutoffTableEntry(StateVariableFilter::kMinimumCutoffIndex));
+}
+
+TEST(SVFControlBlock, KeyboardTrackingReachesTheCutoff) {
+    ADSR envelope = sustainedEnvelope(1.0f);
+    ControlVoltage voltage = ControlVoltage::makeDefault();
+    voltage.noteOn(2000.0f, 96, 1.0f, 1.0f); // tracking 1.0, two octaves up: x2
+    voltage.advance(1000);
+
+    StateVariableFilter filter(true);
+    filter.setCutoffBase(0.3f);
+    filter.updateControlBlock({&voltage, &envelope, nullptr}, 0);
+
+    StateVariableFilter plain(true);
+    plain.setCutoff(0.6f);
+
+    EXPECT_EQ(filter.getCutoffCoefficient(), plain.getCutoffCoefficient());
+}
+
+TEST(SVFControlBlock, ModulationLiftsTheCutoffMultiplicatively) {
+    ADSR envelope = sustainedEnvelope(1.0f);
+    ControlVoltage voltage = heldVoice(500.0f);
+
+    // +1.0 in Q24 doubles the cutoff.
+    const int modulation[1] = {StateVariableFilter::kOne24};
+
+    StateVariableFilter filter(true);
+    filter.setCutoffBase(0.3f);
+    filter.updateControlBlock({&voltage, &envelope, modulation}, 0);
+
+    StateVariableFilter plain(true);
+    plain.setCutoff(0.6f);
+
+    EXPECT_EQ(filter.getCutoffCoefficient(), plain.getCutoffCoefficient());
+}
+
+TEST(SVFControlBlock, ResonanceLowersTheInputGain) {
+    ADSR envelope = sustainedEnvelope(1.0f);
+    ControlVoltage voltage = heldVoice(500.0f);
+
+    StateVariableFilter quiet(true);
+    quiet.setResonanceBase(0.0f);
+    quiet.updateControlBlock({&voltage, &envelope, nullptr}, 0);
+
+    StateVariableFilter sharp(true);
+    sharp.setResonanceBase(1.0f);
+    sharp.updateControlBlock({&voltage, &envelope, nullptr}, 0);
+
+    // Extended variant: 1.25 at zero resonance, 0.5 at full.
+    const int quietGain = static_cast<int>(1.25f * 16777215.0f);
+    const int sharpGain = static_cast<int>(0.5f * 16777215.0f);
+
+    // Gain is private, so observe it through the drive level of a DC step.
+    std::vector<int> a(1, 1 << 20);
+    std::vector<int> b(1, 1 << 20);
+    quiet.setMode(StateVariableFilter::Mode::LowPass);
+    sharp.setMode(StateVariableFilter::Mode::LowPass);
+    quiet.process(a.data(), 1, 1);
+    sharp.process(b.data(), 1, 1);
+
+    EXPECT_GT(a[0], b[0]);
+    EXPECT_GT(quietGain, sharpGain);
+}
+
+TEST(SVFControlBlock, ReleaseUsesTheReleasePosition) {
+    ADSR envelope = sustainedEnvelope(1.0f);
+    ControlVoltage voltage = heldVoice(500.0f);
+    voltage.noteOff();
+
+    // Well past the release: the envelope reads zero, cutoff pins to the floor.
+    voltage.advance(20000);
+
+    StateVariableFilter filter(true);
+    filter.setCutoffBase(0.9f);
+    filter.updateControlBlock({&voltage, &envelope, nullptr}, 0);
+
+    EXPECT_EQ(filter.getCutoffCoefficient(),
+              filter.getCutoffTableEntry(StateVariableFilter::kMinimumCutoffIndex));
+}
+
+TEST(SVFControlBlock, ProcessVoiceRefreshesEveryControlBlock) {
+    ADSR envelope = sustainedEnvelope(1.0f);
+    ControlVoltage voltage = heldVoice(500.0f);
+
+    // A modulation ramp that doubles the cutoff at sample 16 and after.
+    std::vector<int> modulation(64, 0);
+    for (std::size_t index = 16; index < modulation.size(); ++index) {
+        modulation[index] = StateVariableFilter::kOne24;
+    }
+
+    StateVariableFilter filter(true);
+    filter.setMode(StateVariableFilter::Mode::LowPass);
+    filter.setCutoffBase(0.3f);
+
+    std::vector<int> buffer(64, 1 << 20);
+    filter.processVoice({&voltage, &envelope, modulation.data()}, buffer.data(), 64, 1);
+
+    // After the refresh at sample 16 the filter is more open, so the low-pass
+    // output climbs faster than it did in the first block.
+    const int firstBlockRise = buffer[15] - buffer[0];
+    const int secondBlockRise = buffer[31] - buffer[16];
+    EXPECT_GT(secondBlockRise, 0);
+    EXPECT_GT(firstBlockRise, 0);
 }
