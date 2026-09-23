@@ -15,10 +15,11 @@ TEST(ControlVoltageDefaults, MatchTheConstructorBlock) {
     EXPECT_FLOAT_EQ(voltage.filterCutoffScale, 1.0f);
     EXPECT_FLOAT_EQ(voltage.field5C, 1.0f);
 
-    EXPECT_FLOAT_EQ(voltage.field04, 0.0f);
+    EXPECT_EQ(voltage.samplesSinceNoteOn, 0);
+    EXPECT_EQ(voltage.envelopePosition, 0);
+    EXPECT_EQ(voltage.releasePosition, 0);
     EXPECT_FLOAT_EQ(voltage.pitch, 0.0f);
     EXPECT_FLOAT_EQ(voltage.field50, 0.0f);
-    EXPECT_EQ(voltage.modulation, nullptr);
     EXPECT_EQ(voltage.glideSamples, 0u);
 }
 
@@ -54,7 +55,8 @@ TEST(ControlVoltageScaling, AZeroScaleCollapsesToTheCutoffFloor) {
     StateVariableFilter filter(true);
     filter.setCutoffWithVoltage(1.0f, voltage);
 
-    EXPECT_EQ(filter.getCutoffCoefficient(), filter.getCutoffTableEntry(0));
+    EXPECT_EQ(filter.getCutoffCoefficient(),
+              filter.getCutoffTableEntry(StateVariableFilter::kMinimumCutoffIndex));
 }
 
 // The layout mirror is what pins the recovered offsets; the assertions live in
@@ -81,14 +83,15 @@ TEST(ControlVoltageNoteOn, WritesPitchInQ12HertzToAllThreeFields) {
 
 TEST(ControlVoltageNoteOn, SetsTheTwoLowFlagBitsAndClearsRuntimeState) {
     ControlVoltage voltage = ControlVoltage::makeDefault();
-    voltage.field04 = 5.0f;
+    voltage.samplesSinceNoteOn = 5;
     voltage.field40 = 5.0f;
     voltage.noteOn(220.0f, 57, 0.0f, 1.0f);
 
-    EXPECT_EQ(voltage.flags & 0x03, 0x03);
-    EXPECT_FLOAT_EQ(voltage.field04, 0.0f);
+    EXPECT_TRUE(voltage.isActive());
+    EXPECT_TRUE(voltage.isGateOpen());
+    EXPECT_EQ(voltage.samplesSinceNoteOn, 0);
     EXPECT_FLOAT_EQ(voltage.field40, 0.0f);
-    EXPECT_EQ(voltage.modulation, nullptr);
+    EXPECT_EQ(voltage.releasePosition, 0);
 }
 
 TEST(ControlVoltageTracking, PivotFrequencyLeavesTheCutoffAlone) {
@@ -131,4 +134,23 @@ TEST(ControlVoltageGlide, LeavesTheCurrentPitchToSlide) {
     EXPECT_FLOAT_EQ(voltage.glideStartPitch, before);
     EXPECT_FLOAT_EQ(voltage.targetPitch, 440.0f * ControlVoltage::kPitchScale);
     EXPECT_EQ(voltage.glideSamples, 2205u);
+}
+
+// The end of SubSynth::ProcessChannel.
+TEST(ControlVoltageCounters, ReleaseOnlyCountsWhileTheGateIsClosed) {
+    ControlVoltage voltage = ControlVoltage::makeDefault();
+    voltage.noteOn(440.0f, 69, 0.0f, 1.0f);
+
+    voltage.advance(64);
+    EXPECT_EQ(voltage.samplesSinceNoteOn, 64);
+    EXPECT_EQ(voltage.envelopePosition, 64);
+    EXPECT_EQ(voltage.releasePosition, 0);
+    EXPECT_EQ(voltage.envelopePositionForGate(), 64);
+
+    voltage.noteOff();
+    voltage.advance(64);
+    EXPECT_FALSE(voltage.isGateOpen());
+    EXPECT_EQ(voltage.envelopePosition, 128);
+    EXPECT_EQ(voltage.releasePosition, 64);
+    EXPECT_EQ(voltage.envelopePositionForGate(), 64);
 }
