@@ -77,9 +77,9 @@ rather than guess at the tuning.
 | Offset | Written as | Evidence |
 | --- | --- | --- |
 | 0x00 | `flags \|= 3`; bit 2 copied from the key event | `orr r2, r2, #3` at 0x9c188; `bfi sb, r1, #2, #1` |
-| 0x04 | `0` | `str r0, [r3, #0xd00]` |
-| 0x08 | `0` | `str r2, [r3, #0xd04]` |
-| 0x0C | `0` | `str r0, [r3, #0xd08]` |
+| 0x04 | `0` | `str r0, [r3, #0xd00]` — samples since note-on |
+| 0x08 | `0` | `str r2, [r3, #0xd04]` — envelope position while gated |
+| 0x0C | `0` | `str r0, [r3, #0xd08]` — envelope position after note-off |
 | 0x10, 0x14 | `0` unless legato | conditional stores at 0x9c170 |
 | 0x20 | `(uint)(hertz * 4096)` | `vmul` by the 4096.0 literal, `vcvt.u32` |
 | 0x24, 0x28, 0x2C | `hertz * 4096` as floats | second `GetFrequencyFromNoteId`, same literal |
@@ -108,14 +108,41 @@ note is still sounding) the current pitch at 0x28 is left alone so the
 oscillator can slide it towards the target — which is why the oscillator reads
 0x28 twice per call.
 
+## Per block: the end of `SubSynth::ProcessChannel`
+
+After a voice's oscillators and filter have run, `ProcessChannel`
+(`0x9cae4`–`0x9cb6c`) advances the counters and checks for the end of the note:
+
+```
+cv[0x04] += numSamples
+cv[0x08] += numSamples
+cv[0x0C] += numSamples * (gate ? 0 : 1)          ; release time only
+if (envelope->IsDone(cv[0x0C])) {                ; vtable slot 0
+    cv.flags bit 0 = 0                           ; voice inactive
+    filter state at 0x81C..0x828 = 0             ; silence the filter
+}
+```
+
+So 0x0C is **not** a modulation pointer, as the previous notes had it. It is the
+release position: the number of samples since the gate closed, and exactly the
+argument the ADSR's `IsDone` and release path expect. 0x08 is the matching
+position while the gate is open, and the filter picks between them by the gate
+bit when it asks the envelope for a value. 0x04 advances identically to 0x08
+and is read by the oscillator; the two likely diverge on legato, which this
+component has not reached.
+
+The flag byte is therefore: bit 0 voice active, bit 1 gate open, bit 2 copied
+from the key event.
+
 ## What is named, and what is not
 
-Named from the writer and the readers together: `modulation` (0x0C),
-`frequencyQ12` (0x20), `glideStartPitch` / `pitch` / `targetPitch` (0x24–0x2C),
+Named from the writer, the readers and the per-block update together:
+`samplesSinceNoteOn` (0x04), `envelopePosition` (0x08), `releasePosition`
+(0x0C), `frequencyQ12` (0x20), `glideStartPitch` / `pitch` / `targetPitch` (0x24–0x2C),
 `glideSamples` (0x30), `noteId` (0x3C), `frequencyHertz` (0x54) and
 `filterCutoffScale` (0x58).
 
-Still offset-named: 0x04, 0x08, 0x10–0x1C, 0x34, 0x38, 0x40–0x50, and 0x5C.
+Still offset-named: 0x10–0x1C, 0x34, 0x38, 0x40–0x50, and 0x5C.
 Several of those are zeroed on note-on and then owned by the oscillator, so
 their roles will come out of the oscillator's pitch path. 0x5C is copied from
 the key event and defaults to 1.0, which fits velocity; the header says so and
@@ -133,7 +160,7 @@ offsets cannot drift silently.
 ## Still unmapped
 
 The note table behind `GetFrequencyFromNoteId`; the two machine-level floats
-copied to 0x48/0x4C and 0x50; what attaches the per-sample buffer at 0x0C
-after note-on (the constructor and note-on both leave it null, so an LFO or
-envelope stage sets it later); and the note-off path in `DoKeyOff`. The
+copied to 0x48/0x4C and 0x50; the note-off path, which reaches the gate bit
+through `SlaveStopNote` rather than directly in `DoKeyOff`; and the legato
+handling that keeps 0x10/0x14 when a note is held. The
 oscillator's pitch prologue will now read in terms of these names.
