@@ -9,6 +9,7 @@
 //
 // Everything runs in Q24 fixed point, the same domain the ADSR uses.
 
+#include "ADSR.h"
 #include "ControlVoltage.h"
 
 using uint = unsigned int;
@@ -34,8 +35,16 @@ public:
     // Coefficients are refreshed once per block of this many samples.
     static constexpr uint kControlBlockSamples = 16;
 
-    // Cutoff below this fraction collapses to the first table entry.
+    // Cutoff below this fraction is pinned to table entry 12, which is the
+    // entry 0.05 itself would select.
     static constexpr float kMinimumCutoff = 0.05f;
+    static constexpr int kMinimumCutoffIndex = 12;
+
+    // Per-sample modulation values are Q24, scaled by this before use.
+    static constexpr float kModulationScale = 5.960464477539063e-08f; // 2^-24
+
+    // Input gain falls by this much of full scale as resonance rises to one.
+    static constexpr float kResonanceGainSlope = 0.75f;
 
     // extendedResonance selects the damping table with the deeper range.
     // SubSynth passes true.
@@ -56,6 +65,31 @@ public:
     // the way the engine folds ControlVoltage's field at 0x58 into its cutoff
     // base once per control block.
     void setCutoffWithVoltage(float base, const ControlVoltage &voltage);
+
+    // The machine-level cutoff and resonance the envelope scales, the engine's
+    // fields at 0x838 and 0x83C, and the invert flag at 0x840.
+    void setCutoffBase(float cutoff) { cutoffBase_ = cutoff; }
+    void setResonanceBase(float resonance) { resonanceBase_ = resonance; }
+    void setInvertEnvelope(bool invert) { invertEnvelope_ = invert; }
+
+    // Everything the engine reads once per control block.
+    struct VoiceInputs {
+        const ControlVoltage *voltage = nullptr;
+        ADSR *envelope = nullptr;
+        // Per-sample Q24 modulation, indexed by sample offset; null means no
+        // modulation, which is how the engine's default source behaves.
+        const int *modulation = nullptr;
+    };
+
+    // Recompute the coefficients from the envelope, the control voltage and
+    // the modulation source exactly as the engine does at the top of every
+    // 16-sample block. sampleOffset is the block's first sample within the
+    // buffer being processed.
+    void updateControlBlock(const VoiceInputs &inputs, uint sampleOffset);
+
+    // Filter a block in place, refreshing the coefficients every
+    // kControlBlockSamples from the voice inputs as ProcessCV does.
+    void processVoice(const VoiceInputs &inputs, int *buffer, uint numSamples, int numChannels);
 
     // Filter a block in place. Samples are Q24. numChannels of 2 means the
     // buffer is interleaved stereo and both channels are filtered with a
@@ -83,6 +117,8 @@ private:
 
     int processSample(Channel &channel, int input, int feedback, int gain) const;
 
+    static int cutoffIndexFor(float cutoff);
+
     // Built once in the constructor and never modified.
     int cutoffTable_[kTableSize] = {};
     int dampingTable_[kTableSize] = {};
@@ -92,6 +128,11 @@ private:
     int cutoffCoefficient_ = 0;
     int dampingCoefficient_ = 0;
     int inputGain_ = kMax24;
+
+    float cutoffBase_ = 1.0f;
+    float resonanceBase_ = 0.0f;
+    bool invertEnvelope_ = false;
+    bool extendedResonance_ = false;
 
     Channel left_;
     Channel right_;
