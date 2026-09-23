@@ -9,7 +9,8 @@
 // places that read it — FixedPointSVFilter::ProcessCV, FloatSVFilter::ProcessCV,
 // Oscillator::GenerateSignal{LQ,HQ}, SuperOscillator::Trigger and
 // GenerateStereoSignal — from the block in SubSynth::SubSynth that initialises
-// one per voice, and from SubSynth::PlayChannel, which fills it on note-on.
+// one per voice, from SubSynth::PlayChannel, which fills it on note-on, and
+// from the end of SubSynth::ProcessChannel, which advances it per block.
 // See components/ControlVoltage.md.
 //
 // Field names follow the evidence. Where a field's role is established it is
@@ -28,22 +29,27 @@ struct ControlVoltage {
     // filter cutoff unchanged whatever the tracking amount.
     static constexpr float kTrackingPivotHertz = 500.0f;
 
-    // 0x00: flag byte. The constructor clears bits 0..2. Note-on sets bits 0
-    // and 1 and copies bit 2 of the key event's flag word into bit 2.
+    // 0x00: flag byte. Bit 0 is voice-active, cleared by ProcessChannel once
+    // the envelope reports done. Bit 1 is the gate, set on note-on and tested
+    // by the filter to choose which envelope position to use. Bit 2 is copied
+    // from the key event's flag word on note-on.
+    static constexpr std::uint8_t kActiveBit = 0x01;
+    static constexpr std::uint8_t kGateBit = 0x02;
+
     std::uint8_t flags;
     std::uint8_t pad01[3];
 
-    // 0x04: zeroed on note-on, then read by both oscillator paths and by
-    // SuperOscillator. Runtime state owned by the oscillator.
-    float field04;
+    // 0x04: samples since note-on. Zeroed on note-on, advanced by every
+    // processed block.
+    std::int32_t samplesSinceNoteOn;
 
-    // 0x08: zeroed on note-on.
-    std::int32_t field08;
+    // 0x08: the envelope position while the gate is open. Advanced by every
+    // block; the filter passes it to the envelope as the position argument.
+    std::int32_t envelopePosition;
 
-    // 0x0C on the device: pointer to a per-sample modulation array, indexed by
-    // the sample offset within the block. Null on note-on; the filter
-    // dereferences it once per control block, the oscillator every sample.
-    const std::int32_t *modulation;
+    // 0x0C: the envelope position after note-off. Advanced only while the
+    // gate is closed, and passed to IsDone to decide when the voice stops.
+    std::int32_t releasePosition;
 
     // 0x10, 0x14: zeroed on note-on unless the note is held legato.
     std::int32_t field10;
@@ -113,6 +119,21 @@ struct ControlVoltage {
     // The keyboard tracking curve on its own, for tests and for hosts that
     // want to drive the filter without a full note-on.
     static float trackingScale(float frequencyHz, float keyboardTracking);
+
+    bool isActive() const { return (flags & kActiveBit) != 0; }
+    bool isGateOpen() const { return (flags & kGateBit) != 0; }
+
+    // Close the gate. Release time starts counting from the next block.
+    void noteOff() { flags = static_cast<std::uint8_t>(flags & ~kGateBit); }
+
+    // Reproduce the end of SubSynth::ProcessChannel: both note counters move
+    // every block, the release counter only while the gate is closed.
+    void advance(std::uint32_t numSamples);
+
+    // The position the filter hands to its envelope for this block.
+    std::int32_t envelopePositionForGate() const {
+        return isGateOpen() ? envelopePosition : releasePosition;
+    }
 };
 
 // The engine is 32-bit, so its pointers are four bytes and the struct is
@@ -124,9 +145,9 @@ namespace controlVoltageLayout {
 struct Engine {
     std::uint8_t flags;
     std::uint8_t pad01[3];
-    float field04;
-    std::int32_t field08;
-    std::uint32_t modulation;
+    std::int32_t samplesSinceNoteOn;
+    std::int32_t envelopePosition;
+    std::int32_t releasePosition;
     std::int32_t field10;
     std::int32_t field14;
     std::int32_t field18;
@@ -151,8 +172,9 @@ struct Engine {
 
 static_assert(sizeof(Engine) == ControlVoltage::kSize,
               "the engine block is 0x60 bytes, the per-voice stride in SubSynth");
-static_assert(offsetof(Engine, field04) == 0x04, "");
-static_assert(offsetof(Engine, modulation) == 0x0C, "");
+static_assert(offsetof(Engine, samplesSinceNoteOn) == 0x04, "");
+static_assert(offsetof(Engine, envelopePosition) == 0x08, "");
+static_assert(offsetof(Engine, releasePosition) == 0x0C, "");
 static_assert(offsetof(Engine, field1C) == 0x1C, "");
 static_assert(offsetof(Engine, frequencyQ12) == 0x20, "");
 static_assert(offsetof(Engine, glideStartPitch) == 0x24, "");

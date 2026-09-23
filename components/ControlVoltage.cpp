@@ -33,10 +33,10 @@ void ControlVoltage::noteOn(float frequencyHz, int note, float keyboardTracking,
     field5C = eventValue;
     filterCutoffScale = trackingScale(frequencyHz, keyboardTracking);
 
-    // Runtime state the oscillator and glide own is cleared for the new note.
-    field04 = 0.0f;
-    field08 = 0;
-    modulation = nullptr;
+    // Counters restart, and the glide state is cleared for the new note.
+    samplesSinceNoteOn = 0;
+    envelopePosition = 0;
+    releasePosition = 0;
     field10 = 0;
     field14 = 0;
     field40 = 0.0f;
@@ -57,4 +57,13 @@ void ControlVoltage::beginGlide(float targetFrequencyHz, std::uint32_t lengthSam
     frequencyQ12 = static_cast<std::uint32_t>(targetPitch);
     frequencyHertz = targetFrequencyHz;
     glideSamples = lengthSamples;
+}
+
+void ControlVoltage::advance(std::uint32_t numSamples) {
+    const auto count = static_cast<std::int32_t>(numSamples);
+    samplesSinceNoteOn += count;
+    envelopePosition += count;
+    if (!isGateOpen()) {
+        releasePosition += count;
+    }
 }
