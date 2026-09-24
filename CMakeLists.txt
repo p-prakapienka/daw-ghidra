@@ -44,6 +44,7 @@ add_library(components STATIC
         components/StateVariableFilter.cpp
         components/Oscillator.cpp
         components/ControlVoltage.cpp
+        components/LFO.cpp
 )
 
 target_include_directories(components PUBLIC ${CMAKE_CURRENT_SOURCE_DIR})
@@ -67,6 +68,7 @@ if (DAW_GHIDRA_BUILD_TESTS)
             tests/StateVariableFilterTest.cpp
             tests/OscillatorTest.cpp
             tests/ControlVoltageTest.cpp
+            tests/LFOTest.cpp
     )
 
     target_link_libraries(components_tests PRIVATE components GTest::gtest_main)
