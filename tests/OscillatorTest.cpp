@@ -292,15 +292,71 @@ TEST(OscillatorModulation, FrequencyModulationFollowsTheInput) {
     EXPECT_NEAR(countRisingZeroCrossings(plain), 441, 1);
 }
 
-TEST(OscillatorModulation, UnreconstructedModesStaySilentButKeepPhase) {
+TEST(OscillatorModulation, PhaseModeShiftsTheTableIndex) {
+    ControlVoltage shiftedVoice = ControlVoltage::makeDefault();
+    shiftedVoice.noteOn(441.0f, 69, 0.0f, 1.0f);
+    ControlVoltage offsetVoice = shiftedVoice;
+
+    // Input 0x400001 at unity amount gives a product of exactly 0x400000: a
+    // quarter of the table, 1024 entries, with the fraction untouched.
+    std::vector<int> input(4096, 0x400001);
+    Oscillator::Modulation pm;
+    pm.fmInput = input.data();
+    pm.fmAmount = 1 << 24;
+
+    Oscillator modulated;
+    modulated.setModulationMode(Oscillator::ModulationMode::Phase);
+    Oscillator offset;
+    offset.setPhaseOffset(1024);
+
+    std::vector<int> shifted(4096);
+    std::vector<int> reference(4096);
+    modulated.generate(shiftedVoice, 0, shifted.data(), 4096, pm);
+    offset.generate(offsetVoice, 0, reference.data(), 4096, Oscillator::Modulation{});
+
+    EXPECT_EQ(shifted, reference);
+    EXPECT_EQ(shiftedVoice.phase[0], offsetVoice.phase[0]);
+}
+
+TEST(OscillatorModulation, AmplitudeModeScalesTheSample) {
+    ControlVoltage plainVoice = ControlVoltage::makeDefault();
+    plainVoice.noteOn(441.0f, 69, 0.0f, 1.0f);
+    ControlVoltage modulatedVoice = plainVoice;
+
+    // A constant -0.5 at unity amount halves the output and leaves the pitch.
+    std::vector<int> input(4096, -(1 << 23));
+    Oscillator::Modulation am;
+    am.fmInput = input.data();
+    am.fmAmount = 1 << 24;
+
+    Oscillator plain;
+    Oscillator modulated;
+    modulated.setModulationMode(Oscillator::ModulationMode::Amplitude);
+
+    std::vector<int> reference(4096);
+    std::vector<int> scaled(4096);
+    plain.generate(plainVoice, 0, reference.data(), 4096, Oscillator::Modulation{});
+    modulated.generate(modulatedVoice, 0, scaled.data(), 4096, am);
+
+    for (std::size_t index = 0; index < scaled.size(); ++index) {
+        const auto expected = static_cast<int>(
+            (static_cast<std::int64_t>(reference[index]) * ((1 << 24) - 1 - (1 << 23))) >> 24);
+        ASSERT_EQ(scaled[index], expected);
+    }
+    EXPECT_EQ(plainVoice.phase[0], modulatedVoice.phase[0]);
+}
+
+TEST(OscillatorModulation, OtherModesLeavePhaseAndOutputAlone) {
     ControlVoltage voltage = ControlVoltage::makeDefault();
     voltage.noteOn(441.0f, 69, 0.0f, 1.0f);
+
     Oscillator oscillator;
-    oscillator.setModulationMode(Oscillator::ModulationMode::Alternate2);
+    oscillator.setModulationMode(static_cast<Oscillator::ModulationMode>(3));
     std::vector<int> buffer(64, 123);
     oscillator.generate(voltage, 0, buffer.data(), 64, Oscillator::Modulation{});
+
     for (const int value : buffer) {
-        EXPECT_EQ(value, 0);
+        EXPECT_EQ(value, 123);
     }
-    EXPECT_NE(voltage.phase[0], 0u);
+    EXPECT_EQ(voltage.phase[0], 0u);
 }

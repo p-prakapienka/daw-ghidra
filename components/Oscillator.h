@@ -8,8 +8,8 @@
 // components/Oscillator.md for the evidence.
 //
 // The pitch path, glide, phase storage, pitch sweep, the five modulation
-// inputs and frequency modulation are the engine's. Modulation modes 1 and 2
-// and the custom wavetables are not yet implemented.
+// inputs and all three modulation modes are the engine's. The custom
+// wavetables are not yet implemented.
 
 #include <cstdint>
 
@@ -33,14 +33,14 @@ public:
         Custom2 = 8,
     };
 
-    // The value stored at offset 0x24 by SetModulationMode. Mode 0 is the
-    // main path, which already includes frequency modulation from the input
-    // buffer. Modes 1 and 2 take separate paths not yet reconstructed; any
-    // other value makes the engine advance the phase and write nothing.
+    // The value stored at offset 0x24 by SetModulationMode, and what the
+    // modulator product (input * amount * (1 + depth)) is applied to. SubSynth
+    // exposes it as "Osc1 Mod Mode". Any other value makes the engine return
+    // without touching the phase or the output.
     enum class ModulationMode : int {
-        Standard = 0,
-        Alternate1 = 1,
-        Alternate2 = 2,
+        Frequency = 0, // scales the phase increment by 1 + product
+        Phase = 1,     // offsets the table index by the product
+        Amplitude = 2, // scales the output sample by 1 + product
     };
 
     // Every shared table holds one cycle in this many entries.
@@ -89,8 +89,9 @@ public:
         const int *semitones = nullptr; // osc +0x14: whole semitones, +/-12
         const int *fmDepth = nullptr;   // osc +0x18: scales the FM amount by 1 + value
 
-        // Frequency modulation: the engine's fifth argument and sixth
-        // argument. input is another oscillator's Q24 output, amount is Q24.
+        // The modulator: the engine's fifth and sixth arguments. input is
+        // another oscillator's Q24 output, amount is Q24. The modulation mode
+        // decides what the product drives.
         const int *fmInput = nullptr;
         int fmAmount = 0;
     };
@@ -141,7 +142,7 @@ private:
     void generateNoise(int *output, uint numSamples);
 
     Type type_ = Type::Sine;
-    ModulationMode modulationMode_ = ModulationMode::Standard;
+    ModulationMode modulationMode_ = ModulationMode::Frequency;
     const short *table_ = nullptr;
     const short *bandTable_ = nullptr;
     uint band_ = 0;

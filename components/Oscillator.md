@@ -172,11 +172,43 @@ correctly, but it has not been read out of the binary.
 The noise source is a local deterministic generator, because the engine's
 randomness cannot be recovered from a binary. Only its length and level match.
 
+## Modulation modes
+
+`SetModulationMode` stores to `+0x24`; SubSynth drives it from "Osc1 Mod Mode"
+(`SetOscillator1ModulationMode` also keeps a copy at SubSynth `+0x2F88`, which
+the mode button cycles 0 → 1 → 2 → 0). The prologue branches on it: 0 runs the
+frequency-modulation path, 1 jumps to `0x8e3e8`, 2 to `0x8e19c`, and any other
+value stores the phase back **unchanged** and returns without writing the
+output. The HQ generator branches the same way (`0x8ea40`, `0x8ec9c`) with the
+same bodies around its band-limited read.
+
+All three modes compute the same modulator product per sample,
+
+```
+product = q24(input[i], q24(1 + depth[i], amount))     ; depth from osc +0x18
+```
+
+and differ only in where it goes:
+
+| Mode | Name here | Where the product goes |
+|---|---|---|
+| 0 | `Frequency` | increment × (1 + product·2⁻²⁴) |
+| 1 | `Phase` | table index from `(phase + product) >> 12`; the fraction still comes from the unmodulated phase |
+| 2 | `Amplitude` | finished Q24 sample × (product + 0xFFFFFF) >> 24, a 64-bit multiply |
+
+Modes 1 and 2 leave the increment without the FM factor. In SubSynth the
+input is oscillator 2's buffer and the amount is "Osc1 Mod Amount" × 2.5; see
+`components/SubSynthVoice.md`. With oscillator 2 switched off the input is
+zeros, so mode 2 still scales the sample by 0xFFFFFF/2²⁴.
+
+Automation maps the control's 0..1 value to a mode by thresholds: below 0.333
+is 0, above 0.666 is 2, otherwise 1 (`OnSequencerControlEvent`, literals at
+`0x9e2a0` and `0x9e2a4`).
+
 ## Not in this pass
 
-The modulation modes selected by `SetModulationMode`, the custom wavetables at
-type 7 and 8, and everything reached through `ControlVoltage` — pitch
-modulation, sync, the per-voice fields.
+The custom wavetables at types 7 and 8, and the band index in
+`GenerateSignalHQ`.
 
 ## Measured
 

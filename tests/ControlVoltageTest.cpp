@@ -10,7 +10,7 @@ TEST(ControlVoltageDefaults, MatchTheConstructorBlock) {
     EXPECT_EQ(voltage.flags, 0);
     EXPECT_EQ(voltage.field38, 1);
     EXPECT_FLOAT_EQ(voltage.filterCutoffScale, 1.0f);
-    EXPECT_FLOAT_EQ(voltage.field5C, 1.0f);
+    EXPECT_FLOAT_EQ(voltage.velocity, 1.0f);
 
     EXPECT_EQ(voltage.samplesSinceNoteOn, 0);
     EXPECT_EQ(voltage.envelopePosition, 0);

@@ -135,10 +135,13 @@ And the envelope scales **both** cutoff and resonance. That is unusual, but
 the cutoff multiplies the resonance base.
 
 The envelope is called through a vtable whose slot 0 is `IsDone` and slot 1 is
-`GenerateValues` — the ADSR's layout — and `ProcessChannel` calls slot 0 with
-`cv[0x0C]` after every block to decide whether the voice is finished. The
-filter's `+0x814` defaults to an embedded null envelope at `+0x810` and
-SubSynth points it at the voice's filter ADSR.
+`GenerateValues` — the ADSR's layout. The filter only ever calls slot 1. The
+`IsDone` call at the end of `ProcessChannel` goes to the voice's *amplitude*
+envelope (SubSynth `+0x3068 + 0x64·voice`), not to this one. The filter's
+`+0x814` defaults to an embedded null envelope at `+0x810` and SubSynth points
+it at the voice's filter ADSR (SubSynth `+0xBBA8 + 0x64·voice`). When the voice
+ends, `ProcessChannel` zeroes `+0x81C`–`+0x828`, the four integrator states,
+which is `reset()`.
 
 The per-sample array at `+0x80C` is a modulation source, not the control
 voltage. `SubSynth::ConnectLFOs` points every modulation input — the two

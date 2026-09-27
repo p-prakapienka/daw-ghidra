@@ -10,7 +10,7 @@ ControlVoltage ControlVoltage::makeDefault() {
     voltage.flags = 0;
     voltage.field38 = 1;
     voltage.filterCutoffScale = 1.0f;
-    voltage.field5C = 1.0f;
+    voltage.velocity = 1.0f;
 
     return voltage;
 }
@@ -23,14 +23,14 @@ float ControlVoltage::trackingScale(float frequencyHz, float keyboardTracking) {
 }
 
 void ControlVoltage::noteOn(float frequencyHz, int note, float keyboardTracking,
-                            float eventValue, float sweep, float sweepDecay) {
+                            float velocityValue, float sweep, float sweepDecay) {
     const float scaled = frequencyHz * kPitchScale;
 
     flags = static_cast<std::uint8_t>(flags | 0x03);
     noteId = note;
     frequencyHertz = frequencyHz;
     frequencyQ12 = static_cast<std::uint32_t>(scaled);
-    field5C = eventValue;
+    velocity = velocityValue;
     filterCutoffScale = trackingScale(frequencyHz, keyboardTracking);
 
     // Counters restart, and the glide state is cleared for the new note.
