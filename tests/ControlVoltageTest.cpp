@@ -4,9 +4,6 @@
 
 #include <gtest/gtest.h>
 
-// SubSynth's constructor leaves every integer and pointer at zero except the
-// one at 0x38, every float at zero except the pair at 0x58, and the low flag
-// bits clear.
 TEST(ControlVoltageDefaults, MatchTheConstructorBlock) {
     const ControlVoltage voltage = ControlVoltage::makeDefault();
 
@@ -18,8 +15,8 @@ TEST(ControlVoltageDefaults, MatchTheConstructorBlock) {
     EXPECT_EQ(voltage.samplesSinceNoteOn, 0);
     EXPECT_EQ(voltage.envelopePosition, 0);
     EXPECT_EQ(voltage.releasePosition, 0);
-    EXPECT_FLOAT_EQ(voltage.pitch, 0.0f);
-    EXPECT_FLOAT_EQ(voltage.field50, 0.0f);
+    EXPECT_FLOAT_EQ(voltage.currentPitch, 0.0f);
+    EXPECT_FLOAT_EQ(voltage.pitchSweepDecay, 0.0f);
     EXPECT_EQ(voltage.glideSamples, 0u);
 }
 
@@ -59,20 +56,17 @@ TEST(ControlVoltageScaling, AZeroScaleCollapsesToTheCutoffFloor) {
               filter.getCutoffTableEntry(StateVariableFilter::kMinimumCutoffIndex));
 }
 
-// The layout mirror is what pins the recovered offsets; the assertions live in
-// the header, so reaching them here is enough.
 TEST(ControlVoltageLayout, EngineBlockIsNinetySixBytes) {
     EXPECT_EQ(sizeof(controlVoltageLayout::Engine), ControlVoltage::kSize);
     EXPECT_EQ(ControlVoltage::kSize, 0x60u);
 }
 
-// SubSynth::PlayChannel writes, with no glide.
 TEST(ControlVoltageNoteOn, WritesPitchInQ12HertzToAllThreeFields) {
     ControlVoltage voltage = ControlVoltage::makeDefault();
     voltage.noteOn(440.0f, 69, 0.0f, 1.0f);
 
     const float expected = 440.0f * ControlVoltage::kPitchScale;
-    EXPECT_FLOAT_EQ(voltage.pitch, expected);
+    EXPECT_FLOAT_EQ(voltage.currentPitch, expected);
     EXPECT_FLOAT_EQ(voltage.glideStartPitch, expected);
     EXPECT_FLOAT_EQ(voltage.targetPitch, expected);
     EXPECT_EQ(voltage.frequencyQ12, static_cast<std::uint32_t>(expected));
@@ -101,11 +95,8 @@ TEST(ControlVoltageTracking, PivotFrequencyLeavesTheCutoffAlone) {
 }
 
 TEST(ControlVoltageTracking, FollowsASquareRootOfTheFrequencyRatio) {
-    // Two octaves above the pivot is a ratio of 4, whose root is 2.
     EXPECT_FLOAT_EQ(ControlVoltage::trackingScale(2000.0f, 1.0f), 2.0f);
     EXPECT_FLOAT_EQ(ControlVoltage::trackingScale(2000.0f, 0.5f), 1.5f);
-
-    // Below the pivot the scale drops under one and the filter closes.
     EXPECT_LT(ControlVoltage::trackingScale(125.0f, 1.0f), 1.0f);
     EXPECT_FLOAT_EQ(ControlVoltage::trackingScale(125.0f, 1.0f), 0.5f);
 }
@@ -123,20 +114,19 @@ TEST(ControlVoltageTracking, ReachesTheFilterThroughNoteOn) {
     EXPECT_EQ(tracked.getCutoffCoefficient(), fixed.getCutoffCoefficient());
 }
 
-TEST(ControlVoltageGlide, LeavesTheCurrentPitchToSlide) {
+TEST(ControlVoltageGlide, StartsFromTheCurrentPitchAndTargetsTheNewNote) {
     ControlVoltage voltage = ControlVoltage::makeDefault();
     voltage.noteOn(220.0f, 57, 0.0f, 1.0f);
-    const float before = voltage.pitch;
+    const float before = voltage.currentPitch;
 
     voltage.beginGlide(440.0f, 2205);
 
-    EXPECT_FLOAT_EQ(voltage.pitch, before);
+    EXPECT_FLOAT_EQ(voltage.currentPitch, before);
     EXPECT_FLOAT_EQ(voltage.glideStartPitch, before);
     EXPECT_FLOAT_EQ(voltage.targetPitch, 440.0f * ControlVoltage::kPitchScale);
     EXPECT_EQ(voltage.glideSamples, 2205u);
 }
 
-// The end of SubSynth::ProcessChannel.
 TEST(ControlVoltageCounters, ReleaseOnlyCountsWhileTheGateIsClosed) {
     ControlVoltage voltage = ControlVoltage::makeDefault();
     voltage.noteOn(440.0f, 69, 0.0f, 1.0f);

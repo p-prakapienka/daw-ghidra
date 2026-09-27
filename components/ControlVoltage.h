@@ -51,9 +51,10 @@ struct ControlVoltage {
     // gate is closed, and passed to IsDone to decide when the voice stops.
     std::int32_t releasePosition;
 
-    // 0x10, 0x14: zeroed on note-on unless the note is held legato.
-    std::int32_t field10;
-    std::int32_t field14;
+    // 0x10, 0x14: the 24-bit phase accumulator of oscillator 0 and 1. Each
+    // oscillator call reads and writes back its own slot; note-on zeroes them
+    // unless the note is held legato, which keeps the waveform continuous.
+    std::uint32_t phase[2];
     std::int32_t field18;
 
     // 0x1C: pointer, read only by the standard-quality oscillator.
@@ -62,15 +63,17 @@ struct ControlVoltage {
     // 0x20: the note frequency in Q12 hertz as an unsigned integer.
     std::uint32_t frequencyQ12;
 
-    // 0x24, 0x28, 0x2C: pitch in Q12 hertz. Without glide all three are set
-    // to the new note. With glide the current value is left to slide towards
-    // the target, which is why the oscillator reads 0x28 twice per call.
+    // 0x24, 0x28, 0x2C: pitch in Q12 hertz — glide start, glide target and the
+    // current value. Note-on without glide writes all three equal. With glide
+    // the start takes the current value and the target the new note, and the
+    // oscillator interpolates between them once per block, writing the
+    // result to 0x2C. The interpolation is linear in hertz, not in pitch.
     float glideStartPitch;
-    float pitch;
     float targetPitch;
+    float currentPitch;
 
-    // 0x30: glide length in samples. Zero means no glide, and the oscillator
-    // takes a different path when it is non-zero. Not a pointer.
+    // 0x30: glide length in samples. Non-zero makes the oscillator
+    // interpolate; it clears this to zero itself when the glide completes.
     std::uint32_t glideSamples;
 
     std::int32_t field34;
@@ -85,13 +88,13 @@ struct ControlVoltage {
     float field40;
     float field44;
 
-    // 0x48, 0x4C: both copied from the same machine-level float on note-on.
-    float field48;
-    float field4C;
+    // 0x48, 0x4C: a per-oscillator pitch sweep. Both start from the same
+    // machine-level value on note-on; the oscillator multiplies its increment
+    // by (1 + sweep) and then multiplies the sweep by 0x50, every sample.
+    float pitchSweep[2];
 
-    // 0x50: copied from a second machine-level float on note-on; read several
-    // times per call by the oscillator.
-    float field50;
+    // 0x50: the per-sample decay factor applied to both sweeps.
+    float pitchSweepDecay;
 
     // 0x54: the note frequency in hertz.
     float frequencyHertz;
@@ -109,11 +112,14 @@ struct ControlVoltage {
 
     // Reproduce SubSynth::PlayChannel's note-on writes for a note with no
     // glide. keyboardTracking is the machine's filter tracking amount, and
-    // eventValue is the float the engine copies from the key event.
-    void noteOn(float frequencyHz, int note, float keyboardTracking, float eventValue);
+    // eventValue is the float the engine copies from the key event. The sweep
+    // values are the machine-level floats the engine copies into 0x48/0x4C
+    // and 0x50; zero sweep leaves the pitch alone.
+    void noteOn(float frequencyHz, int note, float keyboardTracking, float eventValue,
+                float sweep = 0.0f, float sweepDecay = 1.0f);
 
-    // Retarget the pitch fields for a glide of the given length, leaving the
-    // current pitch where it is so it can slide.
+    // Retarget the pitch fields for a glide of the given length: the start
+    // takes the current pitch, the target the new note.
     void beginGlide(float targetFrequencyHz, std::uint32_t lengthSamples);
 
     // The keyboard tracking curve on its own, for tests and for hosts that
@@ -148,23 +154,21 @@ struct Engine {
     std::int32_t samplesSinceNoteOn;
     std::int32_t envelopePosition;
     std::int32_t releasePosition;
-    std::int32_t field10;
-    std::int32_t field14;
+    std::uint32_t phase[2];
     std::int32_t field18;
     std::uint32_t field1C;
     std::uint32_t frequencyQ12;
     float glideStartPitch;
-    float pitch;
     float targetPitch;
+    float currentPitch;
     std::uint32_t glideSamples;
     std::int32_t field34;
     std::int32_t field38;
     std::int32_t noteId;
     float field40;
     float field44;
-    float field48;
-    float field4C;
-    float field50;
+    float pitchSweep[2];
+    float pitchSweepDecay;
     float frequencyHertz;
     float filterCutoffScale;
     float field5C;
@@ -177,14 +181,15 @@ static_assert(offsetof(Engine, envelopePosition) == 0x08, "");
 static_assert(offsetof(Engine, releasePosition) == 0x0C, "");
 static_assert(offsetof(Engine, field1C) == 0x1C, "");
 static_assert(offsetof(Engine, frequencyQ12) == 0x20, "");
+static_assert(offsetof(Engine, phase) == 0x10, "");
 static_assert(offsetof(Engine, glideStartPitch) == 0x24, "");
-static_assert(offsetof(Engine, pitch) == 0x28, "");
-static_assert(offsetof(Engine, targetPitch) == 0x2C, "");
+static_assert(offsetof(Engine, targetPitch) == 0x28, "");
+static_assert(offsetof(Engine, currentPitch) == 0x2C, "");
 static_assert(offsetof(Engine, glideSamples) == 0x30, "");
 static_assert(offsetof(Engine, field38) == 0x38, "");
 static_assert(offsetof(Engine, noteId) == 0x3C, "");
-static_assert(offsetof(Engine, field48) == 0x48, "");
-static_assert(offsetof(Engine, field50) == 0x50, "");
+static_assert(offsetof(Engine, pitchSweep) == 0x48, "");
+static_assert(offsetof(Engine, pitchSweepDecay) == 0x50, "");
 static_assert(offsetof(Engine, frequencyHertz) == 0x54, "");
 static_assert(offsetof(Engine, filterCutoffScale) == 0x58, "");
 static_assert(offsetof(Engine, field5C) == 0x5C, "");

@@ -23,7 +23,7 @@ float ControlVoltage::trackingScale(float frequencyHz, float keyboardTracking) {
 }
 
 void ControlVoltage::noteOn(float frequencyHz, int note, float keyboardTracking,
-                            float eventValue) {
+                            float eventValue, float sweep, float sweepDecay) {
     const float scaled = frequencyHz * kPitchScale;
 
     flags = static_cast<std::uint8_t>(flags | 0x03);
@@ -37,23 +37,28 @@ void ControlVoltage::noteOn(float frequencyHz, int note, float keyboardTracking,
     samplesSinceNoteOn = 0;
     envelopePosition = 0;
     releasePosition = 0;
-    field10 = 0;
-    field14 = 0;
+    phase[0] = 0;
+    phase[1] = 0;
     field40 = 0.0f;
     field44 = 0.0f;
+    pitchSweep[0] = sweep;
+    pitchSweep[1] = sweep;
+    pitchSweepDecay = sweepDecay;
 
     // No glide: the three pitch fields agree and the glide length is zero.
     glideStartPitch = scaled;
-    pitch = scaled;
     targetPitch = scaled;
+    currentPitch = scaled;
     glideSamples = 0;
 }
 
 void ControlVoltage::beginGlide(float targetFrequencyHz, std::uint32_t lengthSamples) {
-    // The engine leaves 0x28 alone here so the oscillator slides from where
-    // the previous note left it.
-    glideStartPitch = pitch;
+    // PlayChannel's glide branch: the start takes the current value from
+    // 0x2C, the target at 0x28 takes the new note, and 0x2C is left for the
+    // oscillator to move. Glide progress is measured from note-on.
+    glideStartPitch = currentPitch;
     targetPitch = targetFrequencyHz * kPitchScale;
+    samplesSinceNoteOn = 0;
     frequencyQ12 = static_cast<std::uint32_t>(targetPitch);
     frequencyHertz = targetFrequencyHz;
     glideSamples = lengthSamples;

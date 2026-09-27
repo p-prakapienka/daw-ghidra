@@ -3,10 +3,15 @@
 #include <cmath>
 #include <algorithm>
 #include <cstdlib>
+#include <cstdint>
 #include <mutex>
 #include <vector>
 
 namespace {
+
+struct StateScale {
+    static constexpr float kInverseOne24 = 5.960464477539063e-08f; // 2^-24
+};
 
 // The generators take a frequency and a level. Passing the rate divided by the
 // table size puts exactly one cycle in the table, which is what the engine does.
@@ -89,19 +94,18 @@ void trianglewave(short *buffer, uint length, float frequency, float level) {
     }
 }
 
-// The engine's ASwhitenoise writes ints. Its source of randomness is not
-// recoverable from the binary, so this is a local deterministic generator at
-// the same level.
+// ASwhitenoise(int*, unsigned int, float): a fixed-seed add/xor generator, not
+// lrand48. The seeds are the MD5 initial constants. Output is Q24:
+// (int)(a * level * 2^-31 * 16777215) for each successive value of a.
 void whitenoise(int *buffer, uint length, float level) {
-    const float amplitude = level * kFullScale;
-    // Deterministic so tests and renders repeat. The engine's own source of
-    // randomness is not recoverable from the binary.
-    unsigned int state = 0x13579BDFu;
+    const float scale = level * 4.656612873077393e-10f; // level / 2^31
+    std::uint32_t a = 0xEFCDAB89u;
+    std::uint32_t b = 0x67452301u;
     for (uint index = 0; index < length; ++index) {
-        state = state * 1664525u + 1013904223u;
-        const float value =
-            static_cast<float>(static_cast<int>(state >> 8) % 2001 - 1000) / 1000.0f;
-        buffer[index] = static_cast<int>(value * amplitude);
+        const auto value = static_cast<float>(static_cast<std::int32_t>(a));
+        b ^= a;
+        a += b;
+        buffer[index] = static_cast<int>(value * scale * 16777215.0f);
     }
 }
 
@@ -236,48 +240,161 @@ void Oscillator::setType(Type type) {
     bandTable_ = bandLimitedTable(type);
 }
 
-void Oscillator::setFrequency(float hertz) {
-    // One cycle spans kTableSize index steps, each carrying kFractionBits of
-    // fraction, so a full cycle is 2^24 phase units.
-    const float cycle = static_cast<float>(kTableSize << kFractionBits);
-    const float increment = hertz * cycle / kSampleRate;
-    phaseIncrement_ = static_cast<uint>(increment < 0.0f ? 0.0f : increment);
-    band_ = bandForFrequency(hertz);
+int Oscillator::readTable(uint index, int fraction) const {
+    const uint position = index & (kTableSize - 1);
+    const uint next = (index + 1) & (kTableSize - 1);
+
+    int current;
+    int following;
+    if (bandTable_ != nullptr) {
+        current = bandTable_[position * kBandCount + band_];
+        following = bandTable_[next * kBandCount + band_];
+    } else {
+        current = table_[position];
+        following = table_[next];
+    }
+
+    // The difference saturates at the top before it is scaled, as the engine
+    // does with cmp #0x8000 / movwge #0x7fff.
+    int difference = following - current;
+    if (difference >= 0x8000) {
+        difference = 0x7FFF;
+    } else if (difference < -0x7FFF) {
+        difference = -0x7FFF;
+    }
+
+    // fraction is the low 12 phase bits widened to Q15.
+    const int value = current + ((difference * fraction) >> 15);
+
+    // Q15 to Q24 with the engine's clamp.
+    if (value >= 0x8000) {
+        return kOutputFullScale;
+    }
+    if (value < -0x7FFF) {
+        return -kOutputFullScale;
+    }
+    return value << 9;
 }
 
-void Oscillator::generate(int *buffer, uint numSamples) {
-    if (type_ == Type::Noise) {
-        const int *noise = noiseTable();
-        for (uint index = 0; index < numSamples; ++index) {
-            buffer[index] = static_cast<int>(static_cast<float>(noise[noiseIndex_]) * level_);
-            noiseIndex_ = (noiseIndex_ + 1) % kNoiseTableSize;
+void Oscillator::generateNoise(int *output, uint numSamples) {
+    // The engine copies consecutive noise values straight to the output and
+    // wraps the position by (position + n) mod (22050 - n), so the next block's
+    // copy of n values always fits. Pitch and modulation do not apply.
+    const int *noise = noiseTable();
+    for (uint index = 0; index < numSamples; ++index) {
+        output[index] = noise[(noisePosition_ + index) % kNoiseTableSize];
+    }
+    if (numSamples < kNoiseTableSize) {
+        noisePosition_ = (noisePosition_ + numSamples) % (kNoiseTableSize - numSamples);
+    }
+}
+
+void Oscillator::generate(ControlVoltage &voltage, int oscillatorIndex, int *output,
+                          uint numSamples, const Modulation &modulation, float bend) {
+    // Glide is resolved once per block, before anything else: linear in
+    // Q12 hertz from the start to the target over glideSamples, measured from
+    // note-on. Reaching the end clears the glide.
+    float pitch = voltage.targetPitch;
+    if (voltage.glideSamples != 0) {
+        float progress = static_cast<float>(voltage.samplesSinceNoteOn)
+                         / static_cast<float>(voltage.glideSamples);
+        if (progress >= 1.0f) {
+            progress = 1.0f;
+            voltage.glideSamples = 0;
         }
+        voltage.currentPitch =
+            voltage.glideStartPitch + progress * (voltage.targetPitch - voltage.glideStartPitch);
+        pitch = voltage.currentPitch;
+    }
+
+    if (type_ == Type::Noise) {
+        generateNoise(output, numSamples);
         return;
     }
 
-    if (table_ == nullptr) {
+    const float base = pitch * bend * pitchRatio_ * kPitchToIncrement;
+    band_ = bandForFrequency(pitch * bend * pitchRatio_ / ControlVoltage::kPitchScale);
+
+    std::uint32_t &phase = voltage.phase[oscillatorIndex];
+    float &sweep = voltage.pitchSweep[oscillatorIndex];
+
+    if (modulationMode_ != ModulationMode::Standard || (table_ == nullptr && bandTable_ == nullptr)) {
+        // Modes 1 and 2 are not reconstructed; other values write nothing in
+        // the engine either. Keep the phase moving so the voice stays coherent.
         for (uint index = 0; index < numSamples; ++index) {
-            buffer[index] = 0;
+            output[index] = 0;
         }
+        phase = (phase + static_cast<std::uint32_t>(base) * numSamples) & kPhaseMask;
         return;
     }
+
+    // Octave and semitone offsets are floored to whole steps. The engine
+    // recomputes them only when either source is connected, which a null
+    // pointer here stands for.
+    float stepRatio = 1.0f;
 
     for (uint index = 0; index < numSamples; ++index) {
-        // Index and its successor, both wrapped into the table.
-        const uint position = (phase_ >> kFractionBits) & (kTableSize - 1);
-        const uint next = (position + 1) & (kTableSize - 1);
-        const int fraction = static_cast<int>(phase_ & ((1u << kFractionBits) - 1));
+        if (modulation.octave != nullptr || modulation.semitones != nullptr) {
+            const float octaves =
+                modulation.octave != nullptr
+                    ? std::floor(static_cast<float>(modulation.octave[index])
+                                 * StateScale::kInverseOne24 * kOctaveRange)
+                    : 0.0f;
+            const float semitones =
+                modulation.semitones != nullptr
+                    ? std::floor(static_cast<float>(modulation.semitones[index])
+                                 * StateScale::kInverseOne24 * kSemitoneRange)
+                    : 0.0f;
+            stepRatio = std::pow(2.0f, (semitones + octaves * 12.0f) / 12.0f);
+        }
 
-        const int current = bandTable_ != nullptr
-                                ? bandTable_[position * kBandCount + band_]
-                                : table_[position];
-        const int following = bandTable_ != nullptr
-                                  ? bandTable_[next * kBandCount + band_]
-                                  : table_[next];
-        const int difference = following - current;
-        const int interpolated = current + ((difference * fraction) >> kFractionBits);
+        const float vibrato =
+            1.0f + (modulation.vibrato != nullptr
+                        ? static_cast<float>(modulation.vibrato[index]) * StateScale::kInverseOne24
+                              * kVibratoDepth
+                        : 0.0f);
 
-        buffer[index] = static_cast<int>(static_cast<float>(interpolated) * level_);
-        phase_ = (phase_ + phaseIncrement_) & kPhaseMask;
+        float fm = 1.0f;
+        if (modulation.fmInput != nullptr) {
+            const int depthLift =
+                modulation.fmDepth != nullptr ? modulation.fmDepth[index] : 0;
+            const auto depth = static_cast<int>(
+                (static_cast<std::int64_t>(depthLift + 0xFFFFFF) * modulation.fmAmount) >> 24);
+            const auto drive = static_cast<int>(
+                (static_cast<std::int64_t>(modulation.fmInput[index]) * depth) >> 24);
+            fm = 1.0f + static_cast<float>(drive) * StateScale::kInverseOne24;
+        }
+
+        const int phaseShift =
+            modulation.phase != nullptr ? (modulation.phase[index] >> kFractionBits) : 0;
+        const uint tableIndex = (phase >> kFractionBits) + static_cast<uint>(phaseOffset_ + phaseShift);
+        const auto fraction = static_cast<int>((phase & ((1u << kFractionBits) - 1)) << 3);
+
+        output[index] = readTable(tableIndex, fraction);
+
+        // The increment is recomputed in float every sample and truncated.
+        const float increment = (1.0f + sweep) * base * vibrato * fm * stepRatio;
+        phase += static_cast<std::uint32_t>(static_cast<std::int32_t>(increment));
+
+        sweep *= voltage.pitchSweepDecay;
     }
+
+    phase &= kPhaseMask;
+}
+
+void Oscillator::setFrequency(float hertz) {
+    const float scaled = hertz * ControlVoltage::kPitchScale;
+    standalone_.targetPitch = scaled;
+    standalone_.currentPitch = scaled;
+    standalone_.glideStartPitch = scaled;
+    standalone_.glideSamples = 0;
+}
+
+void Oscillator::resetPhase() {
+    standalone_.phase[0] = 0;
+    noisePosition_ = 0;
+}
+
+void Oscillator::generate(int *output, uint numSamples) {
+    generate(standalone_, 0, output, numSamples, Modulation{}, 1.0f);
 }
