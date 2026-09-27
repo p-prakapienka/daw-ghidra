@@ -138,15 +138,18 @@ from the key event.
 
 Named from the writer, the readers and the per-block update together:
 `samplesSinceNoteOn` (0x04), `envelopePosition` (0x08), `releasePosition`
-(0x0C), `frequencyQ12` (0x20), `glideStartPitch` / `pitch` / `targetPitch` (0x24–0x2C),
-`glideSamples` (0x30), `noteId` (0x3C), `frequencyHertz` (0x54) and
-`filterCutoffScale` (0x58).
+(0x0C), `phase[2]` (0x10), `frequencyQ12` (0x20), `glideStartPitch` /
+`targetPitch` / `currentPitch` (0x24–0x2C), `glideSamples` (0x30), `noteId`
+(0x3C), `pitchSweep[2]` (0x48), `pitchSweepDecay` (0x50), `frequencyHertz`
+(0x54), `filterCutoffScale` (0x58) and `velocity` (0x5C).
 
-Still offset-named: 0x10–0x1C, 0x34, 0x38, 0x40–0x50, and 0x5C.
-Several of those are zeroed on note-on and then owned by the oscillator, so
-their roles will come out of the oscillator's pitch path. 0x5C is copied from
-the key event and defaults to 1.0, which fits velocity; the header says so and
-calls it a hypothesis.
+`velocity` was offset-named until `SubSynth::ProcessChannel` was read: it
+opens with `target = (int)(gain * cv[0x5C] * 16777215)`, where `gain` is the
+float at SubSynth `+0xC1E8`, and the voice's output level glides to that
+target. A float copied from the key event, defaulting to 1.0, that sets the
+output level is the velocity.
+
+Still offset-named: 0x18, 0x1C, 0x34, 0x38, 0x40 and 0x44.
 
 ## Host layout versus engine layout
 

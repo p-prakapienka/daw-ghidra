@@ -114,10 +114,14 @@ Every target except 0 also resets the LFO's phase offset — to zero, or to half
 a cycle for Octave, so an octave-switching LFO starts mid-cycle.
 
 Only oscillator 2 can be phase-, octave- or semitone-modulated by an LFO, and
-only oscillator 1 has its FM depth modulated. The wiring itself belongs to the
-SubSynth step; `LFO::Target` records it as data.
+only oscillator 1 has its FM depth modulated. `SubSynthRouting::connect` in
+`components/SubSynthVoice.h` performs the wiring; `LFO::Target` records the
+numbering.
 
 ## Not established
 
-What reads `+0x24`; and the Volume input at SubSynth `+0x3764`, which will come
-out of `ApplyVCA` in the voice step.
+What reads `+0x24`.
+
+The Volume input at SubSynth `+0x3764` turned out not to involve `ApplyVCA`:
+`ProcessChannel`'s output loop scales every sample by `1 + value`, after the
+level smoother. See `components/SubSynthVoice.md`.

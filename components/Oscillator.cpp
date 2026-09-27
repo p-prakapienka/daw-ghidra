@@ -318,13 +318,20 @@ void Oscillator::generate(ControlVoltage &voltage, int oscillatorIndex, int *out
     std::uint32_t &phase = voltage.phase[oscillatorIndex];
     float &sweep = voltage.pitchSweep[oscillatorIndex];
 
-    if (modulationMode_ != ModulationMode::Standard || (table_ == nullptr && bandTable_ == nullptr)) {
-        // Modes 1 and 2 are not reconstructed; other values write nothing in
-        // the engine either. Keep the phase moving so the voice stays coherent.
+    if (table_ == nullptr && bandTable_ == nullptr) {
         for (uint index = 0; index < numSamples; ++index) {
             output[index] = 0;
         }
-        phase = (phase + static_cast<std::uint32_t>(base) * numSamples) & kPhaseMask;
+        return;
+    }
+
+    // Any mode value other than 0, 1 and 2 makes the engine store the phase
+    // back unchanged and return, leaving the output buffer as it was.
+    const bool frequencyMode = modulationMode_ == ModulationMode::Frequency;
+    const bool phaseMode = modulationMode_ == ModulationMode::Phase;
+    const bool amplitudeMode = modulationMode_ == ModulationMode::Amplitude;
+    if (!frequencyMode && !phaseMode && !amplitudeMode) {
+        phase &= kPhaseMask;
         return;
     }
 
@@ -354,25 +361,43 @@ void Oscillator::generate(ControlVoltage &voltage, int oscillatorIndex, int *out
                               * kVibratoDepth
                         : 0.0f);
 
-        float fm = 1.0f;
+        // The modulator product is the same in all three modes:
+        // input * (amount * (1 + depth)), both multiplies Q24. Only where it is
+        // applied differs.
+        int drive = 0;
         if (modulation.fmInput != nullptr) {
             const int depthLift =
                 modulation.fmDepth != nullptr ? modulation.fmDepth[index] : 0;
             const auto depth = static_cast<int>(
                 (static_cast<std::int64_t>(depthLift + 0xFFFFFF) * modulation.fmAmount) >> 24);
-            const auto drive = static_cast<int>(
+            drive = static_cast<int>(
                 (static_cast<std::int64_t>(modulation.fmInput[index]) * depth) >> 24);
-            fm = 1.0f + static_cast<float>(drive) * StateScale::kInverseOne24;
         }
+
+        // Mode 1 adds the product to the phase used for the table index only;
+        // the interpolation fraction still comes from the unmodulated phase.
+        const std::uint32_t indexPhase =
+            phaseMode ? phase + static_cast<std::uint32_t>(drive) : phase;
 
         const int phaseShift =
             modulation.phase != nullptr ? (modulation.phase[index] >> kFractionBits) : 0;
-        const uint tableIndex = (phase >> kFractionBits) + static_cast<uint>(phaseOffset_ + phaseShift);
+        const uint tableIndex =
+            (indexPhase >> kFractionBits) + static_cast<uint>(phaseOffset_ + phaseShift);
         const auto fraction = static_cast<int>((phase & ((1u << kFractionBits) - 1)) << 3);
 
-        output[index] = readTable(tableIndex, fraction);
+        int sample = readTable(tableIndex, fraction);
+
+        // Mode 2 scales the finished sample by (1 + product) in Q24, through a
+        // 64-bit multiply.
+        if (amplitudeMode) {
+            sample = static_cast<int>((static_cast<std::int64_t>(sample) * (drive + 0xFFFFFF)) >> 24);
+        }
+        output[index] = sample;
 
         // The increment is recomputed in float every sample and truncated.
+        // Only mode 0 folds the product into it.
+        const float fm =
+            frequencyMode ? 1.0f + static_cast<float>(drive) * StateScale::kInverseOne24 : 1.0f;
         const float increment = (1.0f + sweep) * base * vibrato * fm * stepRatio;
         phase += static_cast<std::uint32_t>(static_cast<std::int32_t>(increment));
 

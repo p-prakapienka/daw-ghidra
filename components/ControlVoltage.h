@@ -103,19 +103,20 @@ struct ControlVoltage {
     // per control block. 1.0 at the pivot frequency or with tracking off.
     float filterCutoffScale;
 
-    // 0x5C: a float copied from the key event on note-on. Defaults to 1.0,
-    // which fits velocity, but that reading is a hypothesis.
-    float field5C;
+    // 0x5C: the note velocity, copied from the key event on note-on and
+    // defaulting to 1.0. SubSynth::ProcessChannel makes it the voice's output
+    // level target, scaled by the machine's voice gain.
+    float velocity;
 
     // Defaults exactly as SubSynth's constructor leaves them.
     static ControlVoltage makeDefault();
 
     // Reproduce SubSynth::PlayChannel's note-on writes for a note with no
     // glide. keyboardTracking is the machine's filter tracking amount, and
-    // eventValue is the float the engine copies from the key event. The sweep
+    // velocity is the float the engine copies from the key event. The sweep
     // values are the machine-level floats the engine copies into 0x48/0x4C
     // and 0x50; zero sweep leaves the pitch alone.
-    void noteOn(float frequencyHz, int note, float keyboardTracking, float eventValue,
+    void noteOn(float frequencyHz, int note, float keyboardTracking, float velocity,
                 float sweep = 0.0f, float sweepDecay = 1.0f);
 
     // Retarget the pitch fields for a glide of the given length: the start
@@ -171,7 +172,7 @@ struct Engine {
     float pitchSweepDecay;
     float frequencyHertz;
     float filterCutoffScale;
-    float field5C;
+    float velocity;
 };
 
 static_assert(sizeof(Engine) == ControlVoltage::kSize,
@@ -192,6 +193,6 @@ static_assert(offsetof(Engine, pitchSweep) == 0x48, "");
 static_assert(offsetof(Engine, pitchSweepDecay) == 0x50, "");
 static_assert(offsetof(Engine, frequencyHertz) == 0x54, "");
 static_assert(offsetof(Engine, filterCutoffScale) == 0x58, "");
-static_assert(offsetof(Engine, field5C) == 0x5C, "");
+static_assert(offsetof(Engine, velocity) == 0x5C, "");
 
 } // namespace controlVoltageLayout
