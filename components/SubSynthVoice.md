@@ -171,8 +171,9 @@ It clears `+0xC2F9`. For all sixteen slots it:
 - writes a byte into each filter ADSR at `+0x61`;
 - sets the level coefficient to 0.9.
 
-It then notifies the pattern editor. None of this changes the voice DSP. It
-belongs to the machine step, along with what `+0xC2F8` and `+0xC2F9` gate.
+It then notifies the pattern editor. None of this changes the voice DSP;
+`SubSynth::setPolyphony` implements it, and `components/SubSynth.md` covers
+what `+0xC2F8` and `+0xC2F9` gate.
 
 ## Not established
 
