@@ -80,14 +80,14 @@ rather than guess at the tuning.
 | 0x04 | `0` | `str r0, [r3, #0xd00]` — samples since note-on |
 | 0x08 | `0` | `str r2, [r3, #0xd04]` — envelope position while gated |
 | 0x0C | `0` | `str r0, [r3, #0xd08]` — envelope position after note-off |
-| 0x10, 0x14 | `0` unless legato | conditional stores at 0x9c170 |
+| 0x10, 0x14 | `0` unless legato | conditional stores at 0x9c170 — phase of oscillator 0 and 1 |
 | 0x20 | `(uint)(hertz * 4096)` | `vmul` by the 4096.0 literal, `vcvt.u32` |
 | 0x24, 0x28, 0x2C | `hertz * 4096` as floats | second `GetFrequencyFromNoteId`, same literal |
 | 0x30 | glide length in samples, or 0 | `1.0 / samplePeriod` from a global, times the glide time |
 | 0x3C | note id | `str r7, [sl, #0xd38]` with r7 from `event + 0x18` |
 | 0x40, 0x44 | `0.0` | |
-| 0x48, 0x4C | one machine-level float | both from `SubSynth + 0x3054` |
-| 0x50 | another machine-level float | from `SubSynth + 0x3058` |
+| 0x48, 0x4C | one machine-level float | both from `SubSynth + 0x3054` — pitch sweep per oscillator |
+| 0x50 | another machine-level float | from `SubSynth + 0x3058` — the sweep's per-sample decay |
 | 0x54 | hertz | first `GetFrequencyFromNoteId` result stored raw |
 | 0x58 | `1 + tracking * (sqrt(hertz / 500) - 1)` | `vdiv` by the 500.0 literal, `vsqrt`, `vsub` 1.0, `vmla` |
 | 0x5C | a float from `event + 0x34` | `str r2, [sb, #8]` |
@@ -102,11 +102,12 @@ nothing at all. The tracking amount itself arrives through a virtual call on a
 control object, which fits the `Filter Kb track` knob in SubSynth's control
 list.
 
-The three pitch fields are the glide mechanism. Without glide all three are
-written equal. With glide (the branch at 0x9c220, entered when the previous
-note is still sounding) the current pitch at 0x28 is left alone so the
-oscillator can slide it towards the target — which is why the oscillator reads
-0x28 twice per call.
+The three pitch fields are the glide mechanism: 0x24 start, 0x28 target, 0x2C
+current. Without glide all three are written equal. With glide (the branch at
+0x9c220, entered when the previous note is still sounding) the start takes the
+current value from 0x2C and the target takes the new note; the oscillator then
+moves 0x2C once per block. An earlier version of these notes had 0x28 and 0x2C
+the other way round.
 
 ## Per block: the end of `SubSynth::ProcessChannel`
 

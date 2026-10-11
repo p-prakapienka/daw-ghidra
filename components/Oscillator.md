@@ -91,19 +91,128 @@ sxtah r0, r0, r4              ; difference
 So the phase carries 12 fractional bits below a 12-bit index, and the table is
 read with linear interpolation. A full cycle is therefore `2^24` phase units.
 
-## Derived rather than read
+## The pitch path
 
-The phase increment for a given frequency is **not** taken from the engine's
-float setup path, which is entangled with the `ControlVoltage` modulation this
-component does not model. It is derived from the index arithmetic above: one
-cycle is `4096 << 12` units, so `increment = 2^24 * hertz / 44100`. That is the
-only mapping consistent with the table geometry, but it is a derivation, not a
-reading.
+`GenerateSignalLQ`'s signature is
+`(ControlVoltage* cv, int index, int* out, uint n, int* fmInput, int fmAmount, float bend)`,
+and its prologue computes a base increment once per block:
 
-The noise generator is also not the engine's. `whitenoise` takes a `float*` and
-its source of randomness is not recoverable from the binary, so this component
-uses a deterministic generator at the same level. The waveform is different; the
-character and amplitude are not.
+```
+pitch = cv.glideSamples ? glide(cv) : cv[0x28]            ; Q12 hertz
+base  = pitch * bend * this[0x04] * (4096 / 44100)       ; literal at 0x8e1e0
+```
+
+`4096 / 44100` applied to Q12 hertz gives `2^24 * hertz / 44100` — the formula
+the earlier notes had derived from the index arithmetic. It is now read.
+
+`this[0x04]` is **a frequency multiplier, not a level**, as the first patch had
+it: `SubSynth::SetOscillator2PitchOffset` writes oscillator 2's `+0x04`. There
+is no per-oscillator output level at all; the tables carry theirs.
+
+`bend` is `SubSynth + 0xC1EC`, written by `OnChildModified` as
+`powf(2, semitones / 12)` from the `Bend` control.
+
+### Glide
+
+When `cv[0x30]` is non-zero the prologue interpolates, once per block:
+
+```
+t = min(1, cv.samplesSinceNoteOn / cv.glideSamples)
+cv[0x2C] = cv[0x24] + t * (cv[0x28] - cv[0x24])        ; start + t(target - start)
+if (t >= 1) cv.glideSamples = 0
+```
+
+So `0x28` is the target and `0x2C` the current pitch (the previous patch had
+those two swapped), and the glide is **linear in hertz**, not in pitch: halfway
+from 220 to 440 is 330 Hz, not 311.
+
+### Per sample
+
+```
+index    = (phase >> 12) + this[0x0C] + (phaseMod[i] >> 12)
+fraction = (phase & 0xFFF) << 3                          ; Q15
+out[i]   = clampQ24((table[index] + ((table[index+1] - table[index]) * fraction >> 15)) << 9)
+
+vibrato  = 1 + vibratoMod[i] * 2^-24 * 0.1
+fm       = 1 + q24(fmInput[i] * q24(fmAmount * (1 + fmDepthMod[i]))) * 2^-24
+steps    = 2^((floor(4 * octaveMod) * 12 + floor(12 * semitoneMod)) / 12)
+phase   += (int)((1 + cv.sweep[index]) * base * vibrato * fm * steps)
+cv.sweep[index] *= cv[0x50]
+```
+
+Several things fall out of that:
+
+- **Output is Q24.** The interpolated Q15 value is shifted left by nine and
+  clamped to `±0xFFFE00`. The first patch emitted Q15; that was wrong for every
+  consumer downstream.
+- **The phase lives in the control voltage**, at `0x10 + 4 * index`, and is
+  masked to 24 bits when written back. Two oscillators share a voice by using
+  slots 0 and 1.
+- **The increment is recomputed in float every sample** and truncated to int.
+- **`0x48`/`0x4C` are a per-oscillator pitch sweep** that multiplies the
+  increment by `1 + sweep` and decays by `cv[0x50]` each sample. Both start
+  from the same machine-level value on note-on.
+- **Five modulation inputs**, each a pointer on the oscillator to a source whose
+  `+0x0C` is a per-sample Q24 array: vibrato at `+0x00` (±10%), phase at
+  `+0x08`, octave at `+0x10` and semitone at `+0x14` (both floored to whole
+  steps with `floorf`), and FM depth at `+0x18`. `ConnectLFOs` aims these at a
+  default source or an LFO. The octave and semitone ratio is only recomputed
+  when either source is not the default, tested by a sentinel `0x07FFFFFF` in
+  the source.
+- **Frequency modulation is part of mode 0**, driven by the fifth and sixth
+  arguments — another oscillator's output and an amount.
+- `this[0x0C]` is a fixed phase offset in table entries, which fits the
+  `Osc2 Phase` control.
+
+## Modulation modes
+
+`SetModulationMode` stores to `+0x24`; SubSynth drives it from "Osc1 Mod Mode"
+(`SetOscillator1ModulationMode` also keeps a copy at SubSynth `+0x2F88`, which
+the mode button cycles 0 → 1 → 2 → 0). The prologue branches on it: 0 runs the
+path above, 1 jumps to `0x8e3e8`, 2 to `0x8e19c`, and any other value stores
+the phase back **unchanged** and returns without writing the output. The HQ
+generator branches the same way (`0x8ea40`, `0x8ec9c`) with the same bodies
+around its band-limited read.
+
+All three modes compute the same modulator product per sample,
+
+```
+product = q24(input[i], q24(1 + depth[i], amount))     ; depth from osc +0x18
+```
+
+and differ only in where it goes:
+
+| Mode | Name here | Where the product goes |
+|---|---|---|
+| 0 | `Frequency` | increment × (1 + product·2⁻²⁴) |
+| 1 | `Phase` | table index from `(phase + product) >> 12`; the fraction still comes from the unmodulated phase |
+| 2 | `Amplitude` | finished Q24 sample × (product + 0xFFFFFF) >> 24, a 64-bit multiply |
+
+Modes 1 and 2 leave the increment without the FM factor. In SubSynth the
+input is oscillator 2's buffer and the amount is "Osc1 Mod Amount" × 2.5; see
+`components/SubSynthVoice.md`. With oscillator 2 switched off the input is
+zeros, so mode 2 still scales the sample by 0xFFFFFF/2²⁴.
+
+Automation maps the control's 0..1 value to a mode by thresholds: below 0.333
+is 0, above 0.666 is 2, otherwise 1 (`OnSequencerControlEvent`, literals at
+`0x9e2a0` and `0x9e2a4`).
+
+## Noise
+
+`ASwhitenoise` does not use `lrand48`, though the library imports it. It is a
+fixed-seed generator:
+
+```
+a = 0xEFCDAB89, b = 0x67452301            ; the MD5 initial constants
+out[i] = (int)((int32)a * level * 2^-31 * 16777215)
+b ^= a; a += b
+```
+
+so the noise table is **exactly reproducible**, and this component now
+generates it bit for bit. At playback the engine copies consecutive values
+straight to the output — no pitch, no interpolation, no scaling — and wraps the
+position by `(position + n) mod (22050 - n)` so the next block's copy always
+fits.
 
 ## Band-limited tables
 
@@ -156,54 +265,10 @@ maps a pitch onto a band index was not.
 
 ## Derived rather than read
 
-Two things in this component are derivations, marked here so they are not
-mistaken for readings.
-
-The phase increment for a frequency comes from the index arithmetic — a cycle
-is `4096 << 12` units, so `increment = 2^24 * hertz / 44100` — not from the
-engine's float setup path, which is entangled with `ControlVoltage`.
-
-The band chosen for a pitch is likewise derived: the widest band whose top
-harmonic still fits below Nyquist. The engine computes its index somewhere in
-the `GenerateSignalHQ` prologue, from state this component does not model. The
-selection rule here is the one the harmonic limits imply, and it behaves
-correctly, but it has not been read out of the binary.
-
-The noise source is a local deterministic generator, because the engine's
-randomness cannot be recovered from a binary. Only its length and level match.
-
-## Modulation modes
-
-`SetModulationMode` stores to `+0x24`; SubSynth drives it from "Osc1 Mod Mode"
-(`SetOscillator1ModulationMode` also keeps a copy at SubSynth `+0x2F88`, which
-the mode button cycles 0 → 1 → 2 → 0). The prologue branches on it: 0 runs the
-frequency-modulation path, 1 jumps to `0x8e3e8`, 2 to `0x8e19c`, and any other
-value stores the phase back **unchanged** and returns without writing the
-output. The HQ generator branches the same way (`0x8ea40`, `0x8ec9c`) with the
-same bodies around its band-limited read.
-
-All three modes compute the same modulator product per sample,
-
-```
-product = q24(input[i], q24(1 + depth[i], amount))     ; depth from osc +0x18
-```
-
-and differ only in where it goes:
-
-| Mode | Name here | Where the product goes |
-|---|---|---|
-| 0 | `Frequency` | increment × (1 + product·2⁻²⁴) |
-| 1 | `Phase` | table index from `(phase + product) >> 12`; the fraction still comes from the unmodulated phase |
-| 2 | `Amplitude` | finished Q24 sample × (product + 0xFFFFFF) >> 24, a 64-bit multiply |
-
-Modes 1 and 2 leave the increment without the FM factor. In SubSynth the
-input is oscillator 2's buffer and the amount is "Osc1 Mod Amount" × 2.5; see
-`components/SubSynthVoice.md`. With oscillator 2 switched off the input is
-zeros, so mode 2 still scales the sample by 0xFFFFFF/2²⁴.
-
-Automation maps the control's 0..1 value to a mode by thresholds: below 0.333
-is 0, above 0.666 is 2, otherwise 1 (`OnSequencerControlEvent`, literals at
-`0x9e2a0` and `0x9e2a4`).
+One thing is left: the band chosen for a pitch in `GenerateSignalHQ` is still
+the widest band whose top harmonic fits below Nyquist, not the engine's own
+index computation. The HQ prologue reads the same control-voltage fields as the
+LQ one, so the pitch path above applies to it; only the band index is derived.
 
 ## Not in this pass
 
