@@ -92,8 +92,12 @@ Sixteen `{current, target, coefficient}` triples at `+0x2F94 + 12·v`.
   target rather than on it.
 
 The target is `(int)(voiceGain · velocity · 16777215)`. `voiceGain` is the
-float at `+0xC1E8`, set to 1.0 in the constructor. A scan of every function
-in the library for that offset found no other writer.
+float at `+0xC1E8`, set to 1.0 in the constructor.
+
+**Correction:** an earlier version said an offset scan found no other writer
+of `+0xC1E8`. The scan missed one: `OnChildModified` writes it as
+`add r4, r4, #0xC100; vstr s16, [r4, #0xE8]`. That is the `Out|Volume` knob,
+id 29, which stores `v · v` (`SubSynthControls.md`).
 
 ## Routing
 
@@ -135,16 +139,17 @@ resizes its own buffers, but routed LFO outputs still cap a block at 128.
 ## Controls read along the way
 
 These are `OnChildModified` branches, matched by the UI control pointer each
-one compares:
+one compares. The complete table, with control ids, is in
+`SubSynthControls.md`.
 
 | Control pointer | Effect |
 |---|---|
 | `+0xC20C` | Osc2 waveform: `this[0xC2F7] = (value != 0)`, then `SetOscillatorType(value − 1)` |
-| `+0xC210` | Steps `+0xC20C` by one. At 9 or below it sets `0xC2F7`; above 9 it wraps to a literal |
+| `+0xC210` | Steps `+0xC20C` by one. At 9 or below it sets `0xC2F7`; above 9 it wraps to 0.0 (the literal at `0x9fbd0`) |
 | `+0xC228` | `SetOscillatorMix(value)`: `this[0x2F8C] = (int)(value · 16777215)` |
 | `+0xC22C` | `this[0x2F90] = (int)(value · 16777215)`, the modulation amount |
 | `+0xC230` | Cycles the modulation mode: `(this[0x2F88] + 1)`, wrapping above 2 to 0 |
-| `+0xC208` | Pitch sweep: `+0x3054 = −v` and `+0x3058 = 0x3F7FE5C9` (≈0.9996) when `v > 0`; `+0x3054 = −2v` and `+0x3058 = 0x3F7FEDFA` (≈0.99972) otherwise |
+| `+0xC208` | Pitch sweep (id 3, label `Bend\|Amount`, saved as `osc_bend`): `+0x3054 = −v` and `+0x3058 = 0x3F7FE5C9` (≈0.9996) when `v > 0`; `+0x3054 = −2v` and `+0x3058 = 0x3F7FEDFA` (≈0.99972) otherwise |
 | `+0xC260`, `+0xC264`, `+0xC268`, `+0xC26C` | Write attack, decay, sustain and release (ADSR `+0x04`…`+0x10`) into all sixteen filter ADSRs at `+0xBBA8`, calling `OnParamModified` on each. The loop ends at `+0xC1E8`, where the bank ends |
 
 `SetOscillatorType(−1)` is out of range for its jump table. It stores the type
@@ -177,7 +182,4 @@ what `+0xC2F8` and `+0xC2F9` gate.
 
 ## Not established
 
-- The label of the control at `+0xC208`, which drives the pitch sweep.
 - What the ADSR byte at `+0x61` does. The ADSR component does not read one.
-- Whether anything writes `+0xC1E8` through a pointer that the offset scan
-  cannot see.

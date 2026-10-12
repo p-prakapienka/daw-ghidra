@@ -154,8 +154,8 @@ the GOT. That settles the note table that had been left open.
 - `StopAllNotes` does the same for all sixteen slots, whatever the note,
   then resets the on-screen keyboard. `ShutUp` calls it and then pattern
   editor vtable `+0xD8`.
-- The sustain byte `+0x2F04` is written by control `0x401` in
-  `OnSequencerControlEvent`: set at 0.5 and above. Writing 0 calls
+- The sustain byte `+0x2F04` is written by the MIDI-mapping target `0x401`
+  in `OnSequencerControlEvent`: set at 0.5 and above. Writing 0 calls
   `ReleaseSustainedNotes`.
 - `PreviewKeyOff` stores the event in a 64-entry list at `+0x2100` (count
   `+0x2F00`) when the pedal is down and the list is not full, skipping notes
@@ -186,8 +186,8 @@ removed from the UI but not from the code.
 
 Callers:
 
-- the polyphony `−`/`+` buttons (controls `+0xC280`/`+0xC284`) pass
-  `current ∓ 1`;
+- the polyphony `−`/`+` buttons (controls `+0xC280`/`+0xC284`, automatic
+  ids 38/39, no label and not saved) pass `current ∓ 1`;
 - the OSC handler parses `poly`, clamps it to 0..16 and passes it on;
 - `ResetMachine` passes 4;
 - `Serialize` passes 8 for old files, or the saved value.
@@ -228,13 +228,17 @@ LFO constructor's default.
 - `SetOscillator2PitchOffset(ratio)` writes oscillator 2's `+0x04`.
 - `SetOscillator2PhaseOffset(value)` writes `(int)(value · 4096)` table
   entries to oscillator 2's `+0x0C`.
-- `OnSequencerControlEvent` handles three IDs itself:
+- `OnSequencerControlEvent` handles three ids itself, but only on its MIDI
+  path, as targets of a CC mapping:
   - `0x400` is cents mode (value > 0.5);
   - `0x401` is the sustain pedal;
   - `0x1E` is the modulation mode, using the 0.333/0.666 thresholds in
     `components/Oscillator.md`.
 
-  Every other ID is forwarded to the matching UI control.
+  No control has these ids. Every other mapped id, and every plain
+  automation event, goes to the UI control with that id. **Correction:**
+  an earlier version did not separate the two paths. See
+  `SubSynthControls.md`.
 
 ## Machine layout additions
 
@@ -259,5 +263,3 @@ LFO constructor's default.
 
 - What `OutputPanel`'s three position doubles are exactly, and its default
   tempo.
-- The labels of the controls at `+0xC280`/`+0xC284` beyond their `∓1`
-  behaviour.

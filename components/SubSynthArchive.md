@@ -86,19 +86,24 @@ each.
 ## Legacy fix-ups on load
 
 These act on the UI controls after the collection has been applied. They are
-identified here by the machine field that holds the control pointer, because
-the id table is not reconstructed yet.
+identified by the machine field that holds the control pointer, with the
+control id from `SubSynthControls.md`.
 
 - **Version ≤ 2.1.0** (`≤ 0x00020100`): the controls at `+0xC260`,
-  `+0xC264`, `+0xC26C`, `+0xC270`, `+0xC274` and `+0xC27C` are replaced by
-  the fourth root of their value (two `vsqrt` in a row). These are the
+  `+0xC264`, `+0xC26C`, `+0xC270`, `+0xC274` and `+0xC27C` (ids 21, 22,
+  24, 25, 26, 28) get `SetValue(sqrt(sqrt(GetValue())))`. These are the
   attack, decay and release times of both envelopes; sustain (`+0xC268`,
-  `+0xC278`) is left alone. Old files stored times linearly; the current UI
-  applies a fourth-power curve.
+  `+0xC278`) is left alone.
+  - **Correction:** an earlier version of this note said the current UI
+    applies a fourth-power curve. It applies a square: these knobs'
+    `GetValue` returns the position squared. The fourth root acts on that
+    square, so a stored time x becomes the position √x, which reads back as
+    x seconds. Old files stored the time itself, and the fix-up keeps it,
+    up to the knob's 1.75² = 3.0625 s limit. See `SubSynthControls.md`.
 - **Version < 3.0**: the waveform selectors are renumbered, because 3.0
   inserted the two HQ types.
-  - Oscillator 1 (`+0xC200`): v ≥ 4 → v + 2, else v ≥ 3 → v + 1.
-  - Oscillator 2 (`+0xC20C`, where 0 is off): v ≥ 5 → v + 2, else
+  - Oscillator 1 (`+0xC200`, id 1): v ≥ 4 → v + 2, else v ≥ 3 → v + 1.
+  - Oscillator 2 (`+0xC20C`, id 4, where 0 is off): v ≥ 5 → v + 2, else
     v ≥ 4 → v + 1.
 
 `SubSynthArchive` reports both conditions (`needsQuarticTimeFixup`,
@@ -106,9 +111,8 @@ the id table is not reconstructed yet.
 
 ## Not established
 
-- The control id → parameter table (`SubSynth::GetControlIDFromName`,
-  1088 bytes, and `CreateDefaultMapping`), which is needed to apply a
-  loaded collection to the machine.
+- `CreateDefaultMapping`, the default MIDI CC mapping. The control id table
+  itself is in `SubSynthControls.md`.
 - `UICustomWaveformDialog::GetWaveform`, which turns 660 raw points into a
   4096-sample table. This is the missing piece for oscillator types 7 and 8.
 - The pattern editor's block (`SynthPatternEditor`, vtable `+0x80`).
