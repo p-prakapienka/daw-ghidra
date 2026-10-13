@@ -230,14 +230,11 @@ ci = c < 0.05 ? 12 : c > 1 ? 255 : (int)(c · 255)
 +0x818 = (int)(((+0x841 ? 1.0 : 1.25) + t) · 16777215)
 ```
 
-**This disagrees with `StateVariableFilter.md` and the component.** Both
-say `+0x841 ? 1.25 : 1.0`. These branches, the filter constructor
-(`0x94914` `cmp r1, #0` on the flag, then `vmov s13, #1.0` and
-`vmoveq s13, s12` with `s12` = 1.25) and
-`ProcessCV` (`0x94d40`) all select 1.0 when the flag is set. SubSynth
-constructs its filters with the flag set, so its input gain runs from 1.0
-down to 0.325 at the 0.9 resonance limit. The gain is not 1.25 at zero
-resonance. This patch does not change the filter.
+The base is `+0x841 ? 1.0 : 1.25`, the same as the filter's constructor and
+`ProcessCV`. SubSynth constructs its filters with the flag set, so its input
+gain runs from 1.0 down to 0.325 at the 0.9 resonance limit.
+`StateVariableFilter` had the two bases swapped until the fix that followed
+this table (see the correction in `StateVariableFilter.md`).
 
 ### Filter type (`0x9fb20`)
 

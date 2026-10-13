@@ -37,8 +37,10 @@ StateVariableFilter::StateVariableFilter(bool extendedResonance)
             std::pow(0.5f, dampingBase + position * kDampingExponent) * kQ24Scale);
     }
 
-    cutoffCoefficient_ = cutoffTable_[0];
-    dampingCoefficient_ = dampingTable_[0];
+    // The constructor ends by resolving the coefficients from the two bases
+    // (0x948a4-0x9494c), exactly as a control block does but without the
+    // envelope: cutoff 1.0 selects entry 255, resonance 0 entry 0.
+    resolveCoefficients(cutoffBase_, resonanceBase_);
 }
 
 int StateVariableFilter::multiply(int a, int b) {
@@ -98,6 +100,10 @@ void StateVariableFilter::updateControlBlock(const VoiceInputs &inputs, uint sam
     // The envelope scales the resonance as well as the cutoff.
     const float resonance = envelope * resonanceBase_;
 
+    resolveCoefficients(cutoff, resonance);
+}
+
+void StateVariableFilter::resolveCoefficients(float cutoff, float resonance) {
     int resonanceIndex;
     float gainTerm;
     if (resonance < 0.0f) {
@@ -115,8 +121,11 @@ void StateVariableFilter::updateControlBlock(const VoiceInputs &inputs, uint sam
     dampingCoefficient_ = dampingTable_[resonanceIndex];
 
     // Input gain drops as resonance rises so the peak stays in range. The
-    // extended-resonance variant starts from 1.25 rather than 1.0.
-    const float gainBase = extendedResonance_ ? 1.25f : 1.0f;
+    // base is 1.0 with the extended-resonance flag set and 1.25 with it
+    // clear: the constructor (0x94914-0x94938), ProcessCV (0x94d04-0x94d44)
+    // and SubSynth::OnChildModified all load 1.25 and keep it only when the
+    // flag byte at 0x841 is zero.
+    const float gainBase = extendedResonance_ ? 1.0f : 1.25f;
     inputGain_ = static_cast<int>((gainBase + gainTerm) * kQ24Scale);
 }
 

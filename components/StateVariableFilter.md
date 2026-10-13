@@ -112,7 +112,7 @@ resIndex, gainTerm =
 
 this[0x82C] = cutoffTable[cutoffIndex]
 this[0x830] = dampingTable[resIndex]
-this[0x818] = ((this[0x841] ? 1.25 : 1.0) + gainTerm) * 16777215   ; input gain
+this[0x818] = ((this[0x841] ? 1.0 : 1.25) + gainTerm) * 16777215   ; input gain
 feedback = 0xFFFFFF - q24mul(damping, cutoff)
 drive    = q24mul(cutoff, inputGain)
 ```
@@ -124,11 +124,31 @@ The cutoff floor does not select entry 0. Below 0.05 the index is set to
 "behave as 0.05", not a special table entry.
 
 The **input gain is not a free parameter**. It is derived from resonance:
-`(1.25 - 0.75 * resonance)` for the extended variant SubSynth uses, or
-`(1.0 - 0.75 * resonance)` otherwise, times full scale. As resonance rises the
-drive drops from 1.25 to 0.5, which is what keeps the resonant peak in range.
-`setInputGain` remains for hosts that want to override it, but `updateControlBlock`
-sets it the engine's way.
+`(1.0 - 0.75 * resonance)` for the extended variant SubSynth uses, or
+`(1.25 - 0.75 * resonance)` otherwise, times full scale. For SubSynth the
+drive therefore falls from 1.0 at zero resonance to 0.325 at its slider's
+0.9 limit (0.25 at 1.0), which is what keeps the resonant peak in range.
+`setInputGain` remains for hosts that want to override it, but
+`updateControlBlock` sets it the engine's way.
+
+**Correction:** an earlier version of this note and of the component had the
+two bases the other way round. Every site loads 1.25 and replaces it with 1.0
+when the flag byte is non-zero:
+
+- the constructor at `0x94914`–`0x94938`: `cmp r1, #0`, `vmov s12, #1.25`,
+  `vmov s13, #1.0`, `vmoveq s13, s12`;
+- `ProcessCV` at `0x94d04`–`0x94d44`, the same shape;
+- both `SubSynth::OnChildModified` filter branches (`0x9effc`, `0x9f134`):
+  `vmov #1.25`, then `vmovne` from `s16` = 1.0.
+
+So SubSynth's filters were driven 0.25 of full scale too hard.
+
+The constructor ends the same way (`0x948a4`–`0x9494c`). It sets the cutoff
+base to 1.0 and the resonance base to 0.0, then resolves them without an
+envelope: cutoff entry 255, damping entry 0, and the input gain for zero
+resonance. The component now does the same. Before, it started at cutoff
+entry 0 and a gain of exactly full scale, which only mattered for a filter
+processed before its first control block or `setCutoff`.
 
 And the envelope scales **both** cutoff and resonance. That is unusual, but
 `vmul.f32 s15, s15, s12` at `0x94ca8` is unambiguous: the same `e` that scaled

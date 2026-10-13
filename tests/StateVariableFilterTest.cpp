@@ -275,7 +275,44 @@ TEST(SVFControlBlock, ModulationLiftsTheCutoffMultiplicatively) {
     EXPECT_EQ(filter.getCutoffCoefficient(), plain.getCutoffCoefficient());
 }
 
-TEST(SVFControlBlock, ResonanceLowersTheInputGain) {
+// The engine's own float arithmetic for the input gain, truncated by vcvt.
+namespace {
+int engineGain(float base, float term) { return static_cast<int>((base + term) * 16777215.0f); }
+} // namespace
+
+TEST(SVFControlBlock, ExtendedGainRunsFromUnityDown) {
+    ADSR envelope = sustainedEnvelope(1.0f);
+    ControlVoltage voltage = heldVoice(500.0f);
+
+    StateVariableFilter filter(true);
+    filter.setResonanceBase(0.0f);
+    filter.updateControlBlock({&voltage, &envelope, nullptr}, 0);
+    EXPECT_EQ(filter.getInputGain(), 16777215);
+
+    filter.setResonanceBase(0.9f); // SubSynth's slider limit
+    filter.updateControlBlock({&voltage, &envelope, nullptr}, 0);
+    EXPECT_EQ(filter.getInputGain(), engineGain(1.0f, -0.75f * 0.9f));
+
+    filter.setResonanceBase(2.0f); // above one the term pins to -0.75
+    filter.updateControlBlock({&voltage, &envelope, nullptr}, 0);
+    EXPECT_EQ(filter.getInputGain(), engineGain(1.0f, -0.75f));
+}
+
+TEST(SVFControlBlock, StandardGainStartsAboveUnity) {
+    ADSR envelope = sustainedEnvelope(1.0f);
+    ControlVoltage voltage = heldVoice(500.0f);
+
+    StateVariableFilter filter(false);
+    filter.setResonanceBase(0.0f);
+    filter.updateControlBlock({&voltage, &envelope, nullptr}, 0);
+    EXPECT_EQ(filter.getInputGain(), engineGain(1.25f, 0.0f));
+
+    filter.setResonanceBase(1.0f);
+    filter.updateControlBlock({&voltage, &envelope, nullptr}, 0);
+    EXPECT_EQ(filter.getInputGain(), engineGain(1.25f, -0.75f));
+}
+
+TEST(SVFControlBlock, ResonanceLowersTheDrive) {
     ADSR envelope = sustainedEnvelope(1.0f);
     ControlVoltage voltage = heldVoice(500.0f);
 
@@ -287,11 +324,7 @@ TEST(SVFControlBlock, ResonanceLowersTheInputGain) {
     sharp.setResonanceBase(1.0f);
     sharp.updateControlBlock({&voltage, &envelope, nullptr}, 0);
 
-    // Extended variant: 1.25 at zero resonance, 0.5 at full.
-    const int quietGain = static_cast<int>(1.25f * 16777215.0f);
-    const int sharpGain = static_cast<int>(0.5f * 16777215.0f);
-
-    // Gain is private, so observe it through the drive level of a DC step.
+    // The first output sample of a DC step is proportional to the drive.
     std::vector<int> a(1, 1 << 20);
     std::vector<int> b(1, 1 << 20);
     quiet.setMode(StateVariableFilter::Mode::LowPass);
@@ -300,7 +333,18 @@ TEST(SVFControlBlock, ResonanceLowersTheInputGain) {
     sharp.process(b.data(), 1, 1);
 
     EXPECT_GT(a[0], b[0]);
-    EXPECT_GT(quietGain, sharpGain);
+}
+
+TEST(SVFConstruction, ResolvesCoefficientsFromTheDefaultBases) {
+    // Cutoff base 1.0 and resonance base 0.0, resolved at 0x948a4-0x9494c.
+    const StateVariableFilter extended(true);
+    EXPECT_EQ(extended.getCutoffCoefficient(), extended.getCutoffTableEntry(255));
+    EXPECT_EQ(extended.getDampingCoefficient(), extended.getDampingTableEntry(0));
+    EXPECT_EQ(extended.getInputGain(), engineGain(1.0f, -0.0f));
+
+    const StateVariableFilter standard(false);
+    EXPECT_EQ(standard.getCutoffCoefficient(), standard.getCutoffTableEntry(255));
+    EXPECT_EQ(standard.getInputGain(), engineGain(1.25f, -0.0f));
 }
 
 TEST(SVFControlBlock, ReleaseUsesTheReleasePosition) {
