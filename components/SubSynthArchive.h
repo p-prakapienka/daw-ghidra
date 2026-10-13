@@ -9,8 +9,7 @@
 // components/SubSynthArchive.md.
 //
 // Control values are kept as the raw id/value pairs of the control
-// collection. Turning them into engine parameters needs the control id table,
-// which is not reconstructed yet.
+// collection. SubSynthControls::load turns them into engine state.
 
 #include <array>
 #include <cstddef>
@@ -97,8 +96,8 @@ public:
 
     // Before 2.1.1 three ADSR times on each envelope were stored linearly;
     // the engine takes the fourth root on load. Before 3.0 the waveform
-    // selectors had no HQ entries and are renumbered. These apply to control
-    // ids this reader cannot name yet, so they are reported, not applied.
+    // selectors had no HQ entries and are renumbered. The archive only
+    // reports them; SubSynthControls::load applies them by control id.
     bool needsQuarticTimeFixup() const { return version < kQuarticTimesVersion; }
     bool needsWaveformRenumbering() const { return version < kThirdGenerationVersion; }
 };

@@ -88,6 +88,8 @@ public:
     const std::int32_t *output() const { return output_; }
     uint periodSamples() const { return period_; }
     Waveform waveform() const { return waveform_; }
+    float rate() const { return rate_; }
+    std::int32_t depthQ24() const { return depth_; }
 
 private:
     static std::int32_t multiply(std::int32_t a, std::int32_t b);

@@ -48,6 +48,10 @@ public:
     void setDecaySeconds(float seconds) { decaySeconds_ = seconds; }
     void setSustainLevel(float level) { sustainLevel_ = level; }
     void setReleaseSeconds(float seconds) { releaseSeconds_ = seconds; }
+    float attackSeconds() const { return attackSeconds_; }
+    float decaySeconds() const { return decaySeconds_; }
+    float sustainLevel() const { return sustainLevel_; }
+    float releaseSeconds() const { return releaseSeconds_; }
 
     void setAttackCurve(Curve curve) { attackCurve_ = curve; }
     void setDecayCurve(Curve curve) { decayCurve_ = curve; }

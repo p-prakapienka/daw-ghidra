@@ -98,8 +98,11 @@ control id from `SubSynthControls.md`.
     applies a fourth-power curve. It applies a square: these knobs'
     `GetValue` returns the position squared. The fourth root acts on that
     square, so a stored time x becomes the position √x, which reads back as
-    x seconds. Old files stored the time itself, and the fix-up keeps it,
-    up to the knob's 1.75² = 3.0625 s limit. See `SubSynthControls.md`.
+    x seconds. Old files stored the time itself, and the fix-up keeps it.
+    The collection is applied first, though, and the knob clamps the stored
+    x to its 1.75 maximum before the fix-up reads it, so old times above
+    1.75 s come back as 1.75 s. (An earlier version of this correction gave
+    the limit as 3.0625 s.) See `SubSynthControls.md`.
 - **Version < 3.0**: the waveform selectors are renumbered, because 3.0
   inserted the two HQ types.
   - Oscillator 1 (`+0xC200`, id 1): v ≥ 4 → v + 2, else v ≥ 3 → v + 1.
