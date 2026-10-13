@@ -46,8 +46,10 @@ public:
     // Input gain falls by this much of full scale as resonance rises to one.
     static constexpr float kResonanceGainSlope = 0.75f;
 
-    // extendedResonance selects the damping table with the deeper range.
-    // SubSynth passes true.
+    // extendedResonance selects the damping table with the deeper range and
+    // an input gain that starts at 1.0 instead of 1.25. SubSynth passes true.
+    // Construction resolves the coefficients from the default bases, as the
+    // engine's constructor does.
     explicit StateVariableFilter(bool extendedResonance);
 
     void setMode(Mode mode) { mode_ = mode; }
@@ -102,6 +104,7 @@ public:
     // Resolved coefficients, for tests and for plotting the response.
     int getCutoffCoefficient() const { return cutoffCoefficient_; }
     int getDampingCoefficient() const { return dampingCoefficient_; }
+    int getInputGain() const { return inputGain_; }
     int getCutoffTableEntry(int index) const { return cutoffTable_[index]; }
     int getDampingTableEntry(int index) const { return dampingTable_[index]; }
 
@@ -118,6 +121,10 @@ private:
     int processSample(Channel &channel, int input, int feedback, int gain) const;
 
     static int cutoffIndexFor(float cutoff);
+
+    // Table indices and input gain from a final cutoff and resonance, the
+    // tail shared by the constructor and every control block.
+    void resolveCoefficients(float cutoff, float resonance);
 
     // Built once in the constructor and never modified.
     int cutoffTable_[kTableSize] = {};
