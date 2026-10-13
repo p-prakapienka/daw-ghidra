@@ -111,6 +111,7 @@ public:
 
     // Fixed phase offset in table entries, the engine's field at 0x0C.
     void setPhaseOffset(int entries) { phaseOffset_ = entries; }
+    int phaseOffset() const { return phaseOffset_; }
 
     // Render one block for a voice, as GenerateSignalLQ does. The phase lives
     // in the control voltage slot for oscillatorIndex, so two oscillators can

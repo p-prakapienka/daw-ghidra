@@ -90,7 +90,7 @@ public:
         float bend = 1.0f;
 
         // +0xC1E8: scales every voice's velocity into its level target. The
-        // constructor sets 1.0 and nothing found writes it afterwards.
+        // constructor sets 1.0; the Out|Volume control (id 29) writes v².
         float voiceGain = 1.0f;
 
         SubSynthRouting routing;

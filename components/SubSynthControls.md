@@ -3,7 +3,8 @@
 This file is the control-id table: which saved id is which UI control, which
 machine field holds that control, and what `OnChildModified` does with its
 value. It is the map a loaded `SubSynthArchive` needs before it can configure
-a `SubSynth`. There is no code for it yet.
+a `SubSynth`. The `SubSynthControls` component implements it; see
+"The component" at the end.
 
 Recovered from `libcaustic.so` (ARMv7):
 
@@ -279,8 +280,13 @@ old file: x seconds → position x → GetValue x² → ⁴√(x²) = √x → p
 ```
 
 Old files stored the time itself. The fix-up turns it into the position
-that reproduces that time on the current square-curve knob. The knob then
-clamps times above 1.75² = 3.0625 s.
+that reproduces that time on the current square-curve knob.
+
+The collection is loaded before the fix-up, and loading is a `SetValue`, so
+the stored x has already been clamped to the knob's 1.75 when the fix-up
+reads it. Old times above 1.75 s therefore come back as 1.75 s. **Correction:**
+an earlier version of this note gave the limit as 1.75² = 3.0625 s, which is
+the limit for current files.
 
 The waveform renumbering in `SubSynthArchive.md` applies to ids 1 and 4.
 
@@ -337,3 +343,40 @@ What the user does to raise messages 1–3 is not established.
 - The value `UIFileSelector` (id 0) saves, and what `+0xC2F4` selects in the
   preset dialogs.
 - `CreateDefaultMapping`, the default CC → id table.
+
+## The component
+
+`SubSynthControls` wraps a `SubSynth` and keeps one stored value per id, as
+the UI controls do:
+
+- `set(id, value)` is the control's `SetValue` (clamp, truncate or round by
+  class and curve) followed by the branch above. Ids it does not model
+  return false and change nothing.
+- `position(id)` is what would be saved; `value(id)` is what the branch reads.
+- `setModulationMode` and `setCentsMode` are `SetOscillator1ModulationMode`
+  and `SetOscillator2CentsMode`. Cents mode 0 resets oscillator 1's ratio to
+  1.0; any other mode sets `powf(2, −cents / 1200 · 12 / 12)`.
+- `applyAutomation` and `applyMidiTarget` are the two event paths.
+  Both ignore the control byte `+0x07`, whose meaning is not established.
+- `load(archive)` follows `Serialize`'s order: every control in the
+  collection, then `SetPolyphony`, the modulation mode and the cents mode,
+  then the time fix-up and the waveform renumbering.
+- `resetToDefaults()` sets every modelled control to its default through
+  `set`, the derived construction path above.
+
+Not modelled:
+
+- the preset browser (id 0) and the UI-only automatic ids (33–45);
+- the custom waveform points, which `Serialize` passes through the waveform
+  dialog's `GetWaveform`, not reconstructed;
+- the preset name and path and the keyboard octave.
+
+A waveform value outside the oscillator's types leaves the playing type
+alone, as `SetOscillatorType`'s jump table does.
+
+What the branches need from the other components:
+
+- `StateVariableFilter::resolveFromBases()`, the coefficient resolution the
+  cutoff and resonance branches run;
+- read accessors on `ADSR`, `LFO`, `Oscillator` and `StateVariableFilter`,
+  for the tests.

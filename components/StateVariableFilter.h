@@ -73,6 +73,13 @@ public:
     void setCutoffBase(float cutoff) { cutoffBase_ = cutoff; }
     void setResonanceBase(float resonance) { resonanceBase_ = resonance; }
     void setInvertEnvelope(bool invert) { invertEnvelope_ = invert; }
+    float getCutoffBase() const { return cutoffBase_; }
+    float getResonanceBase() const { return resonanceBase_; }
+    bool getInvertEnvelope() const { return invertEnvelope_; }
+
+    // Resolve the coefficients from the two bases without an envelope, as
+    // the constructor and SubSynth's cutoff and resonance handlers do.
+    void resolveFromBases() { resolveCoefficients(cutoffBase_, resonanceBase_); }
 
     // Everything the engine reads once per control block.
     struct VoiceInputs {
