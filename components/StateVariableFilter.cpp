@@ -131,6 +131,13 @@ void StateVariableFilter::resolveCoefficients(float cutoff, float resonance) {
 
 void StateVariableFilter::processVoice(const VoiceInputs &inputs, int *buffer, uint numSamples,
                                        int numChannels) {
+    // ProcessCV dispatches on the mode before anything else (0x94a10-0x94a4c)
+    // and returns for any mode but 1-3, so no control block runs: the input
+    // gain and both coefficients keep their values.
+    if (mode_ != Mode::LowPass && mode_ != Mode::HighPass && mode_ != Mode::BandPass) {
+        return;
+    }
+
     const uint stride = numChannels == 2 ? 2u : 1u;
     for (uint offset = 0; offset < numSamples; offset += kControlBlockSamples) {
         updateControlBlock(inputs, offset);

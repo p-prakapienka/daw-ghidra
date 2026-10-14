@@ -169,6 +169,14 @@ oscillators' fields and each voice filter's `+0x80C` — at a default source, th
 rewires one input per LFO according to the LFO target. So `+0x80C` is an LFO
 output when an LFO targets the filter, and the default source otherwise.
 
+`ProcessCV` dispatches on the mode first (`0x94a10`–`0x94a4c`). Any mode other
+than 1–3 writes the four integrator states back unchanged and returns, so no
+control block runs: the buffer, the input gain and both coefficients are left
+as they were. **Correction:** `processVoice` used to run the control blocks
+for mode 0 and unknown modes too, updating the gain and coefficients. The
+difference showed up when the original `ProcessCV` was run against
+`processVoice` on the same inputs.
+
 `updateControlBlock` and `processVoice` implement all of this. The remaining
 untested claim is that the default source reads as zeros; this component treats
 a null modulation pointer that way.

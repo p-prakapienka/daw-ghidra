@@ -387,3 +387,28 @@ TEST(SVFControlBlock, ProcessVoiceRefreshesEveryControlBlock) {
     EXPECT_GT(secondBlockRise, 0);
     EXPECT_GT(firstBlockRise, 0);
 }
+
+TEST(SVFControlBlock, ModesOutsideOneToThreeLeaveTheFilterAlone) {
+    ADSR envelope = sustainedEnvelope(0.5f);
+    ControlVoltage voltage = heldVoice(440.0f);
+
+    for (const int mode : {0, 7}) {
+        StateVariableFilter filter(true);
+        filter.setMode(static_cast<StateVariableFilter::Mode>(mode));
+        filter.setCutoffBase(0.3f);
+        filter.setResonanceBase(0.6f);
+        const int gain = filter.getInputGain();
+        const int cutoff = filter.getCutoffCoefficient();
+        const int damping = filter.getDampingCoefficient();
+
+        std::vector<int> buffer(32, 1 << 20);
+        filter.processVoice({&voltage, &envelope, nullptr}, buffer.data(), 32, 1);
+
+        EXPECT_EQ(filter.getInputGain(), gain);
+        EXPECT_EQ(filter.getCutoffCoefficient(), cutoff);
+        EXPECT_EQ(filter.getDampingCoefficient(), damping);
+        for (const int value : buffer) {
+            EXPECT_EQ(value, 1 << 20);
+        }
+    }
+}
