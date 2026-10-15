@@ -10,12 +10,14 @@
 namespace {
 
 struct StateScale {
-    static constexpr float kInverseOne24 = 5.960464477539063e-08f; // 2^-24
+    // 1 / 16777215, the Q24 full scale: 0x33800001, one ulp above 2^-24. The
+    // literal GenerateSignalLQ and GenerateSignalHQ load (0x8e1e8).
+    static constexpr float kInverseOne24 = 1.0f / 16777215.0f;
 };
 
 // The generators take a frequency and a level. Passing the rate divided by the
 // table size puts exactly one cycle in the table, which is what the engine does.
-constexpr float kTableFrequency = 44100.0f / 4096.0f; // 10.7666
+constexpr float kTableFrequency = 10.7666f; // the literal GenerateWavetables passes (0x412C43FE), not 44100 / 4096
 constexpr float kFullScale = 32767.0f;
 
 // Levels the engine passes per waveform. The square is quieter because it
@@ -215,19 +217,41 @@ const short *Oscillator::bandLimitedTable(Type type) {
     }
 }
 
-// Derived, not read from the engine: pick the widest band whose top harmonic
-// still fits below Nyquist at this pitch.
-uint Oscillator::bandForFrequency(float hertz) {
-    if (!(hertz > 0.0f)) {
-        return 0;
+// WaveTables::FrequencyToWaveTable. The bands start at roughly C1 and double
+// with every octave; the fraction is how far the frequency has climbed from
+// its band's start towards the next start, clamped to 0..1.
+int Oscillator::frequencyToWaveTable(float hertz, float *fraction) {
+    int band;
+    float position;
+    if (hertz >= 2093.0f) {
+        band = 6;
+        position = (hertz - 2093.0f) / 2093.0f;
+    } else if (hertz >= 1046.0f) {
+        band = 5;
+        position = (hertz - 1046.0f) / 1046.0f;
+    } else if (hertz >= 523.0f) {
+        band = 4;
+        position = (hertz - 523.0f) / 523.0f;
+    } else if (hertz >= 261.0f) {
+        band = 3;
+        position = (hertz - 261.0f) / 261.0f;
+    } else if (hertz >= 130.0f) {
+        band = 2;
+        position = (hertz - 130.0f) / 130.0f;
+    } else if (hertz >= 65.0f) {
+        band = 1;
+        position = (hertz - 65.0f) / 65.0f;
+    } else {
+        band = 0;
+        position = (hertz - 33.0f) / 33.0f;
     }
-    const float nyquist = kSampleRate * 0.5f;
-    for (uint band = 0; band < kBandCount; ++band) {
-        if (static_cast<float>(kBandHarmonics[band]) * hertz <= nyquist) {
-            return band;
-        }
+    if (position < 0.0f) {
+        position = 0.0f;
+    } else if (position > 1.0f) {
+        position = 1.0f;
     }
-    return kBandCount - 1;
+    *fraction = position;
+    return band;
 }
 
 Oscillator::Oscillator() {
@@ -240,31 +264,46 @@ void Oscillator::setType(Type type) {
     bandTable_ = bandLimitedTable(type);
 }
 
+namespace {
+
+// The engine's 16-bit saturation: at or above 0x8000 gives 0x7FFF, below
+// -0x7FFF gives -0x7FFF.
+int saturate16(int value) {
+    if (value >= 0x8000) {
+        return 0x7FFF;
+    }
+    if (value < -0x7FFF) {
+        return -0x7FFF;
+    }
+    return value;
+}
+
+} // namespace
+
 int Oscillator::readTable(uint index, int fraction) const {
     const uint position = index & (kTableSize - 1);
     const uint next = (index + 1) & (kTableSize - 1);
 
-    int current;
-    int following;
+    int value;
     if (bandTable_ != nullptr) {
-        current = bandTable_[position * kBandCount + band_];
-        following = bandTable_[next * kBandCount + band_];
+        // GenerateSignalHQ interpolates band b and band b + 1 at the same
+        // phase, each saturated, then blends them by the band weight.
+        const auto interpolate = [&](uint band) {
+            const int current = bandTable_[position * kBandCount + band];
+            const int following = bandTable_[next * kBandCount + band];
+            return saturate16(current + ((saturate16(following - current) * fraction) >> 15));
+        };
+        const int lower = interpolate(band_);
+        const int upper = interpolate(band_ + 1);
+        value = lower + ((bandWeight_ * saturate16(upper - lower)) >> 15);
     } else {
-        current = table_[position];
-        following = table_[next];
+        // The difference saturates before it is scaled, as the engine does
+        // with cmp #0x8000 / movwge #0x7fff. fraction is the low 12 phase
+        // bits widened to Q15.
+        const int current = table_[position];
+        const int following = table_[next];
+        value = current + ((saturate16(following - current) * fraction) >> 15);
     }
-
-    // The difference saturates at the top before it is scaled, as the engine
-    // does with cmp #0x8000 / movwge #0x7fff.
-    int difference = following - current;
-    if (difference >= 0x8000) {
-        difference = 0x7FFF;
-    } else if (difference < -0x7FFF) {
-        difference = -0x7FFF;
-    }
-
-    // fraction is the low 12 phase bits widened to Q15.
-    const int value = current + ((difference * fraction) >> 15);
 
     // Q15 to Q24 with the engine's clamp.
     if (value >= 0x8000) {
@@ -313,7 +352,14 @@ void Oscillator::generate(ControlVoltage &voltage, int oscillatorIndex, int *out
     }
 
     const float base = pitch * bend * pitchRatio_ * kPitchToIncrement;
-    band_ = bandForFrequency(pitch * bend * pitchRatio_ / ControlVoltage::kPitchScale);
+    // GenerateSignalHQ turns the increment back into hertz for the band
+    // picker: base / (4096 / 44100) * (1 / 4096), in that order.
+    if (bandTable_ != nullptr) {
+        float weight = 0.0f;
+        band_ = static_cast<uint>(
+            frequencyToWaveTable(base / kPitchToIncrement * (1.0f / 4096.0f), &weight));
+        bandWeight_ = static_cast<std::int16_t>(static_cast<int>(weight * 16383.0f));
+    }
 
     std::uint32_t &phase = voltage.phase[oscillatorIndex];
     float &sweep = voltage.pitchSweep[oscillatorIndex];

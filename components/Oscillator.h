@@ -132,9 +132,13 @@ public:
     // Band-limited table for a type, or nullptr when the type has none.
     static const short *bandLimitedTable(Type type);
 
-    // Band for a frequency, widest first. Derived, not read: see the notes.
-    static uint bandForFrequency(float hertz);
+    // WaveTables::FrequencyToWaveTable (0x15c398): the lower of the two bands
+    // an HQ oscillator blends at this frequency, 0..6, and how far towards the
+    // next band it is, 0..1.
+    static int frequencyToWaveTable(float hertz, float *fraction);
     uint band() const { return band_; }
+    // The blend weight towards band() + 1, Q14: (int)(fraction * 16383).
+    int bandWeight() const { return bandWeight_; }
 
 private:
     static void buildTables();
@@ -147,6 +151,7 @@ private:
     const short *table_ = nullptr;
     const short *bandTable_ = nullptr;
     uint band_ = 0;
+    int bandWeight_ = 0;
     float pitchRatio_ = 1.0f;
     int phaseOffset_ = 0;
     uint noisePosition_ = 0;

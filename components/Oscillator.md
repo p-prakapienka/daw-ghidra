@@ -37,7 +37,12 @@ trianglewave(table, 4096, 10.7666f, 0.4f)
 ASwhitenoise(table, 22050, 0.4f)
 ```
 
-`10.7666` is `44100 / 4096`, so exactly one cycle lands in the table. The level
+`10.7666` is close to `44100 / 4096`, so one cycle lands in the table. It is the
+literal `10.7666f` (`0x412C43FE`, loaded with `movw`/`movt`), not the exact
+quotient `10.7666015625` (`0x412C4400`). **Correction:** this component used
+the exact quotient, which moved five sine entries by one (entry 1961 is 1308,
+not 1307) and every sine output that read them. The square, triangle and
+sawtooth tables come out the same either way. The level
 is multiplied by `32767`, giving peaks of 9830 for the sine and sawtooth, 6553
 for the square, and 13106 for the triangle.
 
@@ -133,12 +138,20 @@ index    = (phase >> 12) + this[0x0C] + (phaseMod[i] >> 12)
 fraction = (phase & 0xFFF) << 3                          ; Q15
 out[i]   = clampQ24((table[index] + ((table[index+1] - table[index]) * fraction >> 15)) << 9)
 
-vibrato  = 1 + vibratoMod[i] * 2^-24 * 0.1
-fm       = 1 + q24(fmInput[i] * q24(fmAmount * (1 + fmDepthMod[i]))) * 2^-24
+vibrato  = 1 + vibratoMod[i] * k * 0.1
+fm       = 1 + q24(fmInput[i] * q24(fmAmount * (1 + fmDepthMod[i]))) * k
 steps    = 2^((floor(4 * octaveMod) * 12 + floor(12 * semitoneMod)) / 12)
 phase   += (int)((1 + cv.sweep[index]) * base * vibrato * fm * steps)
 cv.sweep[index] *= cv[0x50]
 ```
+
+`k` is the literal at `0x8e1e8`, `0x33800001`: the float nearest to
+`1 / 16777215`, one ulp above `2^-24`. **Correction:** this component used
+exactly `2^-24`. The difference is invisible for vibrato and FM, but it moves
+the octave and semitone inputs across `floorf` boundaries. A negative input
+that lands exactly on a step comes out one step lower with the original: a
+semitone input of `−0x800000` (−0.5) is `floorf(−6.0000004) = −7` semitones,
+where `2^-24` gave `−6`. Positive inputs are unaffected.
 
 Several things fall out of that:
 
@@ -256,24 +269,60 @@ one phase step sit in the same cache line, which is the point.
 `GenerateSignal` picks HQ or LQ from the flag at `+0x34`, which
 `SetOscillatorType` sets only for types 3 and 5.
 
-Playback still has to choose which of the eight copies to read. The rule in
-this component — widest band whose top harmonic is still ≤ Nyquist — is
-**derived, not read**. The engine has a picker in the `GenerateSignalHQ`
-prologue, mixed with state this component does not model. The tables, the
-caps, and the interleaved layout were read from the binary; the function that
-maps a pitch onto a band index was not.
+### Choosing and blending bands
 
-## Derived rather than read
+`GenerateSignalHQ` asks `WaveTables::FrequencyToWaveTable(float, float*)`
+(`0x15c398`) once per block. The hertz it passes are computed from the block's
+increment as `base / (4096 / 44100) * (1 / 4096)`, in that order. The function
+compares against seven thresholds (`.rodata` `0x15c48c`…), roughly the Cs of
+octaves 1 to 7:
 
-One thing is left: the band chosen for a pitch in `GenerateSignalHQ` is still
-the widest band whose top harmonic fits below Nyquist, not the engine's own
-index computation. The HQ prologue reads the same control-voltage fields as the
-LQ one, so the pitch path above applies to it; only the band index is derived.
+| Hertz from | Band | Fraction |
+|---|---|---|
+| 2093 | 6 | (f − 2093) / 2093 |
+| 1046 | 5 | (f − 1046) / 1046 |
+| 523 | 4 | (f − 523) / 523 |
+| 261 | 3 | (f − 261) / 261 |
+| 130 | 2 | (f − 130) / 130 |
+| 65 | 1 | (f − 65) / 65 |
+| below 65 | 0 | (f − 33) / 33 |
+
+The fraction is clamped to 0..1, and the prologue turns it into a Q14 weight,
+`(int)(fraction * 16383)`. Each sample then reads **two** bands, the returned
+one and the next narrower one, and blends them:
+
+```
+lower  = sat16(b[i][band]   + (sat16(b[i+1][band]   - b[i][band])   * frac >> 15))
+upper  = sat16(b[i][band+1] + (sat16(b[i+1][band+1] - b[i][band+1]) * frac >> 15))
+value  = lower + (weight * sat16(upper - lower) >> 15)
+out[i] = clampQ24(value << 9)
+```
+
+where `sat16` saturates to ±0x7FFF as the LQ difference does. Band 7 is only
+ever the upper half of a blend.
+
+**Correction:** this component used to pick a single band, the widest whose
+top harmonic stayed below Nyquist, a rule derived rather than read. The engine
+crossfades between neighbouring bands instead, so its HQ output differs from
+any single-band read.
+
+## Checked against the original
+
+Every table `GenerateWavetables` builds is identical. So is `GenerateSignal`
+for every type except the custom ones (7 and 8) in 189 scenarios. Each
+scenario ran three consecutive blocks and covered:
+
+- all three modulation modes;
+- pitch ratio, phase offset, glide, pitch sweep in both slots, bend, and very
+  low and high notes;
+- each modulation input on its own, including FM with depth.
+
+Each block compared the output and the control voltage afterwards, on the
+3.2.0 (beta 7) armv7 library.
 
 ## Not in this pass
 
-The custom wavetables at types 7 and 8, and the band index in
-`GenerateSignalHQ`.
+The custom wavetables at types 7 and 8.
 
 ## Measured
 
