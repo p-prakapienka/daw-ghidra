@@ -26,7 +26,7 @@ Calls out to `nextafter` (stub `0x11f2acc`) and `fmod` (stub `0x11f27c0`).
 | 0x50 | beats per frame (our name) | multiplier in `frameOffsetToBeatTime` and `cropSegment` |
 | 0x58 | `grooveAmount` (float) | `Setter<float, &Segment::grooveAmount>`; `cropSegment` copies 0x4c–0x5b |
 
-`ClipRegion` (0x20 bytes) is `start` at 0x00, followed by an `optional<Loop>` at 0x08: start, end, and engaged at 0x18.
+`ClipRegion` (0x28 bytes) is `start` at 0x00, then an `optional<Loop>` at 0x08 (start, end, engaged at 0x18), then `end` at 0x20. `songTimeToClipTime` reads only the first two; `end` is placed by `launcher::Clip` and matches the model's `FClipRegion` member order (`mStart`, `mLoop`, `mEnd`).
 
 ## Behaviour
 

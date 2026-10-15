@@ -25,6 +25,7 @@ add_library(note_seq_re STATIC
 )
 target_include_directories(note_seq_re PUBLIC
   support
+  shared/base/MathLib/include
   shared/engine-core/EngineCoreLib/include
   shared/engine/EngineLib/src)
 
@@ -44,6 +45,7 @@ if (NOTE_SEQ_RE_BUILD_TESTS)
 
   enable_testing()
   add_executable(note_seq_re_tests
+    tests/LauncherNodeTest.cpp
     tests/TransportFunctionsTest.cpp
   )
   target_link_libraries(note_seq_re_tests PRIVATE note_seq_re GTest::gtest_main)

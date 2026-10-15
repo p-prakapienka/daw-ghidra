@@ -17,10 +17,12 @@ namespace ableton::engine {
             Beats value{};  // TODO verify; assert "quantum > 0.0"
         };
 
-        // 0x20 bytes. Layout read from songTimeToClipTime @0x10a5cc.
+        // 0x28 bytes. start and oLoop are read by songTimeToClipTime @0x10a5cc; end follows them
+        // inside launcher::Clip, and the model's FClipRegion has the same mStart, mLoop, mEnd order.
         struct ClipRegion {
             Beats start{};               // 0x00: clip time at the launch beat
             std::optional<Loop> oLoop;   // 0x08 start, 0x10 end, 0x18 engaged
+            Beats end{};                 // 0x20: clip time where a one-shot clip stops
         };
 
         // 0x60 bytes. A stretch of the audio block with a constant tempo.
@@ -46,8 +48,9 @@ namespace ableton::engine {
         Beats frameOffsetToBeatTime(transport::Segment const&, Frames);  // @0x10a45c -> decomp/transport_frameOffsetToBeatTime__000000000010a45c.c
     }  // namespace transport
 
-    static_assert(sizeof(transport::ClipRegion) == 0x20);
+    static_assert(sizeof(transport::ClipRegion) == 0x28);
     static_assert(offsetof(transport::ClipRegion, oLoop) == 0x08);
+    static_assert(offsetof(transport::ClipRegion, end) == 0x20);
     static_assert(sizeof(transport::Segment) == 0x60);
     static_assert(offsetof(transport::Segment, isPlaying) == 0x20);
     static_assert(offsetof(transport::Segment, oLoop) == 0x28);

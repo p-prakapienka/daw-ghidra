@@ -1,5 +1,8 @@
 // Reconstructed skeleton (stubs). Original: shared/engine/EngineLib/src/nodes/LauncherNode.cpp
+// Notes: LauncherNode.md next to this file.
 #include "nodes/LauncherNode.hpp"
+
+#include "ableton/math/MathUtils.hpp"
 
 // Assertions seen in the binary for this file (line: condition):
 //   line 39: segment.isPlaying
@@ -123,17 +126,43 @@ void LauncherNode<Content>::setState(AudioContext const& p0, launcher::ChangeOri
 }
 
 // @0x3a7b9c -> decomp/LauncherNode_midi_player_Content_launchTimeIfDue__00000000003a7b9c.c
+// When the pending trigger fires inside this segment: the first multiple of its quantum at or
+// after the segment start, if that is still before the segment end. A zero quantum fires at once.
 template <typename Content>
-std::optional<Beats> LauncherNode<Content>::launchTimeIfDue(transport::Segment const& p0) const {
-    // TODO
-    return {};
+std::optional<Beats> LauncherNode<Content>::launchTimeIfDue(transport::Segment const& segment) const {
+    if (!moPendingTrigger) {
+        return std::nullopt;
+    }
+    Beats const launchTime = math::roundUpToMultiple(segment.beatTimeStart, moPendingTrigger->quantum);
+    if (launchTime < segment.beatTimeEnd) {
+        return launchTime;
+    }
+    return std::nullopt;
 }
 
 // @0x3a7ae4 -> decomp/LauncherNode_midi_player_Content_clipStopTimeIfDue__00000000003a7ae4.c
+// When a one-shot (non-looping) clip runs out inside this segment. Looping clips never stop on
+// their own. A clip whose start lies after the segment start (the song time jumped back) stops
+// at once.
 template <typename Content>
-std::optional<Beats> LauncherNode<Content>::clipStopTimeIfDue(transport::Segment const& p0) const {
-    // TODO
-    return {};
+std::optional<Beats> LauncherNode<Content>::clipStopTimeIfDue(transport::Segment const& segment) const {
+    if (!mPlayingState.oPlayingClipSlot) {
+        return std::nullopt;
+    }
+    launcher::Clip<Content> const* clip = mClipSlots.clipAt(*mPlayingState.oPlayingClipSlot);
+    if (!clip || clip->region.oLoop) {
+        return std::nullopt;
+    }
+    Beats const segmentStart = segment.beatTimeStart;
+    Beats const clipStart = mPlayingState.sessionClipStartTime;
+    if (clipStart > segmentStart) {
+        return segmentStart;
+    }
+    Beats const stopTime = clipStart + clip->region.end - clip->region.start;
+    if (stopTime >= segment.beatTimeEnd) {
+        return std::nullopt;
+    }
+    return stopTime < segmentStart ? segmentStart : stopTime;
 }
 
 }  // namespace ableton::engine
@@ -143,3 +172,21 @@ std::optional<Beats> LauncherNode<Content>::clipStopTimeIfDue(transport::Segment
 template struct ableton::engine::launcher::Clip<ableton::engine::midi_player::Content>;
 template struct ableton::engine::launcher::detail::ClipSlotsHolder<ableton::engine::midi_player::Content>;
 template struct ableton::engine::LauncherNode<ableton::engine::midi_player::Content>;
+
+// Layout checks against the original (arm64, 64-bit size_t).
+namespace {
+using Content = ableton::engine::midi_player::Content;
+using Node = ableton::engine::LauncherNode<Content>;
+using Holder = ableton::engine::launcher::detail::ClipSlotsHolder<Content>;
+static_assert(sizeof(ableton::engine::launcher::Clip<Content>) == 0x58);
+static_assert(offsetof(ableton::engine::launcher::Clip<Content>, region) == 0x20);
+static_assert(sizeof(ableton::engine::launcher::ClipSlot<Content>) == 0x60);
+static_assert(sizeof(ableton::engine::launcher::PlayingState) == 0x20);
+static_assert(sizeof(Holder) == 0x78);
+static_assert(offsetof(Holder, moTemporaryClip) == 0x10);
+static_assert(sizeof(Node::PendingTrigger) == 0x38);
+static_assert(offsetof(Node::PendingTrigger, oLaunchTime) == 0x28);
+static_assert(offsetof(Node, moPendingTrigger) == 0x78);
+static_assert(offsetof(Node, mPlayingState) == 0xb8);
+static_assert(offsetof(Node, mIsRecording) == 0xd8);
+}  // namespace
