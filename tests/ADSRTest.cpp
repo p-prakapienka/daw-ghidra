@@ -157,3 +157,38 @@ TEST(ADSRRetrigger, FadesInFromTheLevelStillSounding) {
     EXPECT_LT(values[1], values[0]);
     EXPECT_GT(values[0], 0);
 }
+
+TEST(ADSRRetrigger, StartFromCurrentLevelSkipsTheRestart) {
+    ADSR envelope = makeEnvelope(ADSR::Curve::Linear);
+    envelope.setStartFromCurrentLevel(true);
+    std::vector<short> values(8000);
+    envelope.GenerateValues(0, 1, values.data(), 8000);
+    const short sustained = values.back();
+    ASSERT_EQ(sustained, static_cast<short>(kSustain * 32767.0f));
+
+    // A position that jumps backwards does not restart the note.
+    std::vector<short> again(4);
+    envelope.GenerateValues(0, 1, again.data(), 4);
+    EXPECT_NE(again.front(), 0);
+
+    // A note after a release rises from where the release left off.
+    std::vector<short> released(500);
+    envelope.GenerateValues(0, 0, released.data(), 500);
+    std::vector<short> next(40);
+    envelope.GenerateValues(0, 1, next.data(), 40);
+    EXPECT_GE(next.back(), released.back());
+    EXPECT_GT(next.front(), 0);
+}
+
+TEST(ADSRSustain, PlateauFollowsTheCurrentSustain) {
+    // The sustain plateau is written from the live sustain (0x54), so a
+    // change takes effect mid-note; the decay's floor stays latched.
+    ADSR envelope = makeEnvelope(ADSR::Curve::Linear);
+    std::vector<short> values(8000);
+    envelope.GenerateValues(0, 1, values.data(), 8000);
+    envelope.setSustainLevel(0.25f);
+    envelope.OnParamModified();
+    std::vector<short> more(16);
+    envelope.GenerateValues(8000, 1, more.data(), 16);
+    EXPECT_EQ(more.back(), static_cast<short>(0.25f * 32767.0f));
+}

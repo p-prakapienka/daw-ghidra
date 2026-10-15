@@ -85,19 +85,103 @@ hyperbola reaches about 0.993 of full scale at the top of the ramp.
 
 ## Note handling
 
-- The second argument to `GenerateValues` is the gate: non-zero holds the note,
-  zero runs the release. The first argument is the sample offset since the last
-  gate change.
-- Segment lengths, the step sizes, and the sustain level are latched when a note
-  starts and when it is released (offsets `0x20`, `0x24`, `0x28`, `0x48`, `0x4C`,
-  `0x50`, `0x5C`, `0x5E`). Editing a parameter mid-note therefore cannot change
-  the segment already in flight.
-- The first `min(attackSamples, 32)` samples of an attack crossfade from
-  whatever level the previous note left behind, using a linear blend
-  `(position / fadeLength) * 32767`. This is what stops a retrigger clicking.
-  The float division in that blend is in the original code as well.
-- The release multiplies its shaped ramp by the level captured at note-off, so
-  releasing during attack or decay starts from wherever the envelope was.
+`GenerateValues(position, gate, out, n)` takes the sample offset since the last
+gate change and the gate. `GenerateValues` is one function of 3428 bytes whose
+loops are written out once per curve, and the curves are **not** handled
+alike. `ADSR.cpp` follows that shape: one loop per curve per segment.
+
+### Starting a note
+
+With the gate set:
+
+- **Retrigger.** If the byte at `0x61` is clear and the position is below the
+  last one seen (`0x38`), the note restarts from zero (`0x7fca8`).
+- **New note.** Otherwise, if the note is not already held (`0x60`), a new
+  note starts (`0x8002c`). With `0x61` set it rises from the last level
+  written (`0x56`), over a span of `0x7FFF − level`; with it clear, from zero
+  over `0x7FFF`.
+- **What a start latches:**
+  - the attack and decay lengths (`0x20`, `0x24`);
+  - the previous note's level for the fade (`0x5A`);
+  - the start level (`0x58`);
+  - the sustain (`0x5C`);
+  - both steps, as `(int)(16777216.0f / (float)length)` in float,
+    saturating.
+
+  **Correction:** the steps used to be integer `0x1000000 / length`.
+
+The byte at `0x61` is cleared by the constructor. SubSynth sets it to 1 on
+every amplitude envelope (`SubSynth::SubSynth`, `0xa048c`), and
+`SetPolyphony` copies `+0xC2F9` into it on every filter envelope (`0x9ccdc`).
+So amplitude envelopes never restart from zero: a note starts from wherever
+the voice is.
+
+### Attack
+
+While `position < attackLength`, the first `min(attackLength, 32)` samples
+fade in with the weight `(int)((float)position / (float)fadeLength * 32767)`.
+The curves differ in what they fade from:
+
+- **Linear and exponential** fade from the sample they wrote last, so the
+  fade is recursive: `out = prev + (w * sat16(shaped − prev) >> 15)`, with
+  `prev` updated each sample and stored back to `0x56`.
+- **Logarithmic** first copies `0x5A` into `0x56` and fades from that fixed
+  level. Its shaped value is offset and then doubled with 16-bit wrap:
+  `sat16` of the offset value maps ≥ 0x8000 to −2 and < −0x7FFF to 2.
+
+**Correction:** the fade used to blend from one fixed level for every curve.
+
+After the fade:
+
+| Curve | Value |
+|---|---|
+| Linear | `start + ((short)span * min(ramp >> 9, 0x7FFF) >> 15)`. The ramp is clamped, not wrapped to 16 bits as before. |
+| Exponential | `start + sbfx15(s2 * span)`, where `s2 = (s * s >> 15) & 0xFFFF` and `s = (ramp >> 9) & 0xFFFF` |
+| Logarithmic | `start + sbfx15((log(s) << 1) * span)`, where `s = (ramp >> 10) & 0xFFFF` |
+
+Every value is saturated to ±0x7FFF.
+
+### Decay and sustain
+
+- **Span:** the decay's span uses the **current** sustain (`0x54`), while its
+  floor uses the sustain latched at note-on (`0x5C`).
+- **Plateau:** samples past the decay are filled with the **current**
+  sustain, so a sustain edit shows up mid-note.
+- **Correction:** both used the latched sustain before.
+- **Ramp:** the decay ramp is `0xFFFE00 − step · (position − attackLength)`,
+  taken as a signed 16-bit value and floored at zero before the curve is
+  applied.
+
+### Release
+
+On the first gate-clear block after a held note, the release latches:
+
+- its length (`0x28`);
+- the level it starts from, the last sample written (`0x5E`);
+- its step, computed the same way as the attack's.
+
+It writes `max(0, sbfx15(shaped * level))` until the length runs out, then
+zeros, and goes idle. While idle the block is cleared with `memset` and
+nothing else happens.
+
+### Empty blocks
+
+The engine has no early return for `n = 0`. The latching still runs, and its
+closing store reads the halfword before the buffer as the "last sample". This
+component runs the latching too, but keeps the last level unchanged instead of
+reading outside the buffer.
+
+## Checked against the original
+
+`GenerateValues`, `IsDone` and the resolved lengths are identical to the
+3.2.0 (beta 7) armv7 library in 128 scenarios:
+
+- **eight parameter sets:** every curve, mixed curves, SubSynth's minimums
+  (10, 20, 200), zero-length segments, the 3.0625 s maximum times, and
+  out-of-range values;
+- **eight timelines:** held then released, released early, a retrigger in
+  each segment, odd block sizes, never held, and a jump in position;
+- **both values of `0x61`.**
 
 ## Known member offsets
 
@@ -117,24 +201,5 @@ hyperbola reaches about 0.993 of full scale at the top of the ramp.
 | 0x5C | sustain latched for the note in flight |
 | 0x5E | level captured at note-off |
 | 0x60 | note is held |
+| 0x61 | a new note starts from the current level, and backward positions do not retrigger |
 | 0x62 | envelope is idle |
-
-## What this reconstruction does not claim
-
-The implementation in `ADSR.cpp` is a readable reconstruction, not a proven
-bit-exact port. The shapes, constants, clamps, latching and retrigger fade all
-match what the disassembly does, and the measured output is correct at the
-segment boundaries:
-
-```
-curve      attack midpoint   attack end   decay end   release midpoint
-Linear          16374          32749        16383          8191
-Exponential      8182          32731        16383          4095
-Logarithmic     25195          32525        16383         12601
-```
-
-with `sustain = 0.5` giving `16383` exactly. But the original interleaves its
-loops in ways a compiler chose, and a sample-for-sample comparison against the
-engine has not been run. The most likely place for a one-sample difference is
-the release, where the original decrements the ramp before emitting in the
-linear case and after it in the other two.
