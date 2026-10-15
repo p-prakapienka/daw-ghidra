@@ -28,3 +28,25 @@ target_include_directories(note_seq_re PUBLIC
   shared/engine-core/EngineCoreLib/include
   shared/engine/EngineLib/src)
 
+
+option(NOTE_SEQ_RE_BUILD_TESTS "Build the note-seq-re tests" ON)
+
+if (NOTE_SEQ_RE_BUILD_TESTS)
+  if (NOT TARGET GTest::gtest_main)
+    include(FetchContent)
+    FetchContent_Declare(googletest
+      GIT_REPOSITORY https://github.com/google/googletest.git
+      GIT_TAG v1.17.0)
+    set(INSTALL_GTEST OFF CACHE BOOL "" FORCE)
+    set(gtest_force_shared_crt ON CACHE BOOL "" FORCE)
+    FetchContent_MakeAvailable(googletest)
+  endif ()
+
+  enable_testing()
+  add_executable(note_seq_re_tests
+    tests/TransportFunctionsTest.cpp
+  )
+  target_link_libraries(note_seq_re_tests PRIVATE note_seq_re GTest::gtest_main)
+  include(GoogleTest)
+  gtest_discover_tests(note_seq_re_tests)
+endif ()
