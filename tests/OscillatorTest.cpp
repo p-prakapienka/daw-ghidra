@@ -80,17 +80,42 @@ TEST(OscillatorBands, HarmonicLimitsHalveAcrossTheBands) {
     }
 }
 
-TEST(OscillatorBands, HigherPitchesSelectNarrowerBands) {
-    EXPECT_LT(Oscillator::bandForFrequency(110.0f), Oscillator::bandForFrequency(2000.0f));
-    EXPECT_EQ(Oscillator::bandForFrequency(8000.0f), Oscillator::kBandCount - 1);
-    for (const float hertz : {55.0f, 220.0f, 440.0f, 1000.0f, 4000.0f}) {
-        const unsigned int band = Oscillator::bandForFrequency(hertz);
-        if (band == Oscillator::kBandCount - 1) {
-            continue;
-        }
-        EXPECT_LE(static_cast<float>(Oscillator::kBandHarmonics[band]) * hertz,
-                  Oscillator::kSampleRate * 0.5f);
-    }
+TEST(OscillatorBands, FrequencyPicksTheLowerOfTwoBandsAndAWeight) {
+    float fraction = -1.0f;
+    // Each band starts at its threshold and is blended towards the next over
+    // one octave.
+    EXPECT_EQ(Oscillator::frequencyToWaveTable(440.0f, &fraction), 3);
+    EXPECT_EQ(fraction, (440.0f - 261.0f) / 261.0f);
+    EXPECT_EQ(Oscillator::frequencyToWaveTable(65.0f, &fraction), 1);
+    EXPECT_EQ(fraction, 0.0f);
+    EXPECT_EQ(Oscillator::frequencyToWaveTable(2093.0f, &fraction), 6);
+    EXPECT_EQ(fraction, 0.0f);
+    // Above twice the top threshold the weight stops at one.
+    EXPECT_EQ(Oscillator::frequencyToWaveTable(8000.0f, &fraction), 6);
+    EXPECT_EQ(fraction, 1.0f);
+    // Below 33 Hz the lowest band is used unblended.
+    EXPECT_EQ(Oscillator::frequencyToWaveTable(20.0f, &fraction), 0);
+    EXPECT_EQ(fraction, 0.0f);
+    EXPECT_EQ(Oscillator::frequencyToWaveTable(49.5f, &fraction), 0);
+    EXPECT_EQ(fraction, 0.5f);
+}
+
+TEST(OscillatorBands, HQPlaybackRecordsBandAndWeight) {
+    ControlVoltage voltage = ControlVoltage::makeDefault();
+    voltage.noteOn(440.0f, 69, 0.0f, 1.0f);
+    Oscillator osc;
+    osc.setType(Oscillator::Type::SawtoothHQ);
+    std::vector<int> output(16);
+    osc.generate(voltage, 0, output.data(), 16, {});
+    EXPECT_EQ(osc.band(), 3u);
+    EXPECT_GT(osc.bandWeight(), 0);
+    EXPECT_LT(osc.bandWeight(), 16383);
+}
+
+TEST(OscillatorTables, SineUsesTheEnginesFrequencyLiteral) {
+    // GenerateWavetables passes 10.7666f (0x412C43FE), not 44100 / 4096; the
+    // difference moves a handful of entries by one.
+    EXPECT_EQ(Oscillator::table(Oscillator::Type::Sine)[1961], 1308);
 }
 
 TEST(OscillatorPlayback, RunsAtTheRequestedFrequency) {
@@ -210,7 +235,9 @@ TEST(OscillatorBands, BandLimitedSquareKeepsOnlyOddHarmonics) {
     const double second = magnitudeAt(samples, 880.0);
     const double third = magnitudeAt(samples, 1320.0);
     EXPECT_GT(first, toOutput(1000));
-    EXPECT_LT(second, first * 1e-5);
+    // Blending two separately rounded bands leaves even-harmonic leakage of
+    // about 1e-5 of the fundamental.
+    EXPECT_LT(second, first * 1e-4);
     EXPECT_NEAR(third, first / 3.0, first * 0.05);
 }
 
