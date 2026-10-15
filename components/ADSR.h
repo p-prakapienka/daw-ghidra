@@ -7,8 +7,9 @@
 // components/ADSR.md for the evidence behind every constant and for the
 // original member offsets this class replaces.
 //
-// The generator is integer-only. Segment shapes are computed in a 24-bit
-// fixed-point ramp and emitted as Q15 samples in the range 0 .. 32767.
+// The generator works in a 24-bit fixed-point ramp and emits Q15 samples.
+// GenerateValues follows the original's structure, one loop per curve per
+// segment, because the curves are not handled alike (see the notes).
 
 using uint = unsigned int;
 using ushort = unsigned short;
@@ -79,13 +80,16 @@ public:
     short sustainQ15() const { return sustainQ15_; }
     bool isIdle() const { return idle_; }
 
-private:
-    // Applies a segment shape to a 24-bit ramp, returning 0 .. 32767.
-    static int shape(int ramp24, Curve curve);
+    // The byte at 0x61. When set, a note that starts while the envelope is not
+    // held rises from the level it last output instead of from zero, and a
+    // position that jumps backwards does not restart the note. The ADSR
+    // constructor clears it; SubSynth sets it on its amplitude envelopes.
+    void setStartFromCurrentLevel(bool enabled) { startFromCurrentLevel_ = enabled; }
+    bool startsFromCurrentLevel() const { return startFromCurrentLevel_; }
 
+private:
     void generateRelease(uint position, short *output, uint numSamples);
-    void generateAttackDecaySustain(uint position, short *output, uint numSamples);
-    void beginNote(uint position);
+    void generateHeld(uint position, short *output, uint numSamples);
 
     // Parameters (offsets 0x04, 0x08, 0x0C, 0x10).
     float attackSeconds_ = 0.0f;
@@ -129,5 +133,6 @@ private:
     short lastOutput_ = 0;
     short previousLevel_ = 0;
     bool noteHeld_ = false;
+    bool startFromCurrentLevel_ = false;
     bool idle_ = true;
 };

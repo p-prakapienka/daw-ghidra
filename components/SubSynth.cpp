@@ -16,6 +16,12 @@ SubSynth::SubSynth() : pitchSweepDecay(kSweepDownDecay) {
     // The transport's tempo is not traced; 120 is the LFO constructor's.
     setTempo(120.0f);
     setLFOTargets(LFO::Target::None, LFO::Target::None);
+    // The constructor's amplitude-envelope loop sets the byte at +0x61 of
+    // every amplitude envelope to 1 (0xa048c): a new note rises from the level
+    // the voice is at. Its other writes there are not modelled yet.
+    for (SubSynthVoice &voice : voices) {
+        voice.amplitudeEnvelope.setStartFromCurrentLevel(true);
+    }
     setPolyphony(kDefaultPolyphony);
 }
 
@@ -94,9 +100,10 @@ void SubSynth::setPolyphony(int requested) {
     polyphony_ = voices;
     monophonic_ = monophonic;
 
-    // All sixteen slots, not just the enabled ones. The engine also writes
-    // the (unmodelled) byte at +0x61 of each filter envelope here.
+    // All sixteen slots, not just the enabled ones. Each filter envelope's
+    // byte at +0x61 takes +0xC2F9 as it now stands (0x9ccdc).
     for (SubSynthVoice &voice : this->voices) {
+        voice.filterEnvelope.setStartFromCurrentLevel(flagC2F9_);
         resetVoltage(voice.voltage);
         voice.level.smoothing = SubSynthVoice::kLevelSmoothing;
     }

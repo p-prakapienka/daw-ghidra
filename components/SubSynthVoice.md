@@ -173,7 +173,7 @@ It clears `+0xC2F9`. For all sixteen slots it:
   `noteId`, `0x34`, `0x40`, `0x44`, both sweeps and the sweep decay at `0x50`,
   and `frequencyHertz`;
 - sets `field38` to 1 and `filterCutoffScale` and `velocity` to 1.0;
-- writes a byte into each filter ADSR at `+0x61`;
+- copies `+0xC2F9` into each filter ADSR's byte at `+0x61` (see `ADSR.md`);
 - sets the level coefficient to 0.9.
 
 It then notifies the pattern editor. None of this changes the voice DSP;
@@ -182,4 +182,3 @@ what `+0xC2F8` and `+0xC2F9` gate.
 
 ## Not established
 
-- What the ADSR byte at `+0x61` does. The ADSR component does not read one.
