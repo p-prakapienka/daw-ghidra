@@ -314,3 +314,17 @@ TEST(SubSynthProcess, RendersSound) {
     }
     EXPECT_GT(peak, 0);
 }
+
+TEST(SubSynthConstruction, EnvelopesStartAsTheEngineSetsThem) {
+    const auto synth = makeSynth();
+    for (const auto &voice : synth->voices) {
+        // SetMinSamples(10, 20, 200), attack and decay 0, release 2 s.
+        EXPECT_EQ(voice.filterEnvelope.attackSamples(), 10u);
+        EXPECT_EQ(voice.filterEnvelope.decaySamples(), 20u);
+        EXPECT_EQ(voice.filterEnvelope.releaseSamples(), 88200u);
+        EXPECT_FALSE(voice.filterEnvelope.startsFromCurrentLevel());
+        // Sustain 16777215.0 saturates to 0xFFFF until the controls replace it.
+        EXPECT_EQ(voice.amplitudeEnvelope.sustainQ15(), -1);
+        EXPECT_TRUE(voice.amplitudeEnvelope.startsFromCurrentLevel());
+    }
+}

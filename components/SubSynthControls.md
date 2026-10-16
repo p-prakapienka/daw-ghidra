@@ -141,19 +141,20 @@ The LFO-target items, in order, are:
 
 No control sets LFO 2's waveform. Only LFO 1 has a waveform control.
 
-### Two defaults that differ from what the constructor writes directly
+### Two defaults that replace what the constructor writes directly
 
 - The constructor sets each filter envelope's release to 2.0 (`0xa0314`…).
   Later it calls `SetValue(2.0)` on the release knob, which clamps the
-  position to 1.75. If that call reaches `OnChildModified`, the filter
-  envelopes then get `1.75² = 3.0625` s.
+  position to 1.75, and `OnChildModified` then gives the filter envelopes
+  `1.75² = 3.0625` s.
 - The amplitude sustain is written as `16777215.0`, and the sustain knob
   gets `SetValue(16777215.0)`, which clamps to 1.0. So the odd value in the
   amplitude envelopes is overwritten with 1.0 by the same route.
 
-Both depend on `OnChildModified` running during construction. The notify
-bytes and parent pointers are set by then, but the emulation stubbed the
-call, so this is **derived**.
+Both happen because `OnChildModified` runs during construction. **This is
+now read, not derived.** Running the whole constructor under the emulator
+reached the `OnChildModified` thunk 23 times, once per default `SetValue`.
+It left the filter envelopes at 3.0625 s and the amplitude sustain at 1.0.
 
 ## Controls with automatic ids (not saved)
 
@@ -335,8 +336,6 @@ What the user does to raise messages 1–3 is not established.
 
 ## Not established
 
-- Whether `OnChildModified` runs during construction. This decides the two
-  defaults above.
 - The writers of `g_nPitchBendSemis`.
 - What the control byte `+0x07` means beyond "skip plain automation". The
   MIDI path sets it.
@@ -362,7 +361,7 @@ the UI controls do:
   collection, then `SetPolyphony`, the modulation mode and the cents mode,
   then the time fix-up and the waveform renumbering.
 - `resetToDefaults()` sets every modelled control to its default through
-  `set`, the derived construction path above.
+  `set`, as the constructor does.
 
 Not modelled:
 

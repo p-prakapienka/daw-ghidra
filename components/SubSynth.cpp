@@ -16,11 +16,35 @@ SubSynth::SubSynth() : pitchSweepDecay(kSweepDownDecay) {
     // The transport's tempo is not traced; 120 is the LFO constructor's.
     setTempo(120.0f);
     setLFOTargets(LFO::Target::None, LFO::Target::None);
-    // The constructor's amplitude-envelope loop sets the byte at +0x61 of
-    // every amplitude envelope to 1 (0xa048c): a new note rises from the level
-    // the voice is at. Its other writes there are not modelled yet.
+    // The constructor's two envelope loops, each parameter followed by
+    // OnParamModified as there. Filter envelopes (0xa038c-0xa03c4): minimums
+    // of 10, 20 and 200 samples, attack and decay 0, sustain 1, release 2 s.
+    // Amplitude envelopes (0xa0450-0xa048c): attack, decay and release 0,
+    // sustain 16777215.0, and the byte at +0x61 set, so a new note rises from
+    // the level the voice is at. The control defaults applied through
+    // OnChildModified afterwards replace most of these (SubSynthControls).
     for (SubSynthVoice &voice : voices) {
-        voice.amplitudeEnvelope.setStartFromCurrentLevel(true);
+        ADSR &filter = voice.filterEnvelope;
+        filter.SetMinSamples(10, 20, 200);
+        filter.setAttackSeconds(0.0f);
+        filter.OnParamModified();
+        filter.setDecaySeconds(0.0f);
+        filter.OnParamModified();
+        filter.setSustainLevel(1.0f);
+        filter.OnParamModified();
+        filter.setReleaseSeconds(2.0f);
+        filter.OnParamModified();
+
+        ADSR &amplitude = voice.amplitudeEnvelope;
+        amplitude.setAttackSeconds(0.0f);
+        amplitude.OnParamModified();
+        amplitude.setDecaySeconds(0.0f);
+        amplitude.OnParamModified();
+        amplitude.setSustainLevel(16777215.0f);
+        amplitude.OnParamModified();
+        amplitude.setReleaseSeconds(0.0f);
+        amplitude.OnParamModified();
+        amplitude.setStartFromCurrentLevel(true);
     }
     setPolyphony(kDefaultPolyphony);
 }

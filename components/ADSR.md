@@ -21,9 +21,16 @@ shape and are cut-down versions of this one.
 `OnParamModified` converts seconds to samples and clamps:
 
 ```
-samples = clamp((uint)(seconds * 44100.0f), minSamples, 220500)
-sustainQ15 = (short)(sustain * 32767.0f)
+samples = clamp((uint)vcvt(seconds * 44100.0f), minSamples, 220500)
+sustainQ15 = (short)vcvt(sustain * 32767.0f)
 ```
+
+`vcvt` is `vcvt.s32.f32`: it truncates and saturates at both ends, so an
+oversized sustain becomes `0x7FFFFFFF` and keeps `0xFFFF`. SubSynth's
+amplitude envelopes are built with a sustain of 16777215.0, so their
+`sustainQ15` is −1 until the Sustain control's default replaces it. A plain
+C++ cast would be undefined there, and gives `INT_MIN` on x86 (low half 0),
+so the component saturates explicitly.
 
 - `44100.0f` and `32767.0f` are literals in the function's constant pool at
   `0x806f4` and `0x806f8`. The sample rate is **hardcoded**; the envelope does

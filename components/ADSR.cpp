@@ -53,14 +53,25 @@ inline int expShape(int s) {
     return (mulLow(s, s) >> 15) & 0xFFFF;
 }
 
-// 2^24 / length in float, converted with vcvt.s32.f32 (which saturates, so a
-// zero length gives INT_MAX).
-int stepFor(uint length) {
-    const float step = 16777216.0f / static_cast<float>(length);
-    if (!(step < 2147483648.0f)) {
+// vcvt.s32.f32: truncates, saturates at both ends, and turns NaN into 0. A
+// plain static_cast is undefined out of range and gives INT_MIN on x86.
+int toInt(float value) {
+    if (value != value) {
+        return 0;
+    }
+    if (value >= 2147483648.0f) {
         return 0x7FFFFFFF;
     }
-    return static_cast<int>(step);
+    if (value <= -2147483648.0f) {
+        return -0x7FFFFFFF - 1;
+    }
+    return static_cast<int>(value);
+}
+
+// 2^24 / length in float, converted with vcvt.s32.f32 (so a zero length gives
+// INT_MAX).
+int stepFor(uint length) {
+    return toInt(16777216.0f / static_cast<float>(length));
 }
 
 // The weight of the click-suppressing fade at a position, Q15.
@@ -88,9 +99,8 @@ void ADSR::OnParamModified() {
     const auto resolve = [](float seconds, uint minimum) {
         // The engine converts with vcvt.s32.f32 and stores the result in an
         // unsigned field, so a negative time wraps to a very large value and is
-        // then clamped to the maximum rather than the minimum. Converting
-        // through int reproduces that without relying on undefined behaviour.
-        const auto samples = static_cast<uint>(static_cast<int>(seconds * ADSR::kSampleRate));
+        // then clamped to the maximum rather than the minimum.
+        const auto samples = static_cast<uint>(toInt(seconds * ADSR::kSampleRate));
         if (samples < minimum) {
             return minimum;
         }
@@ -103,8 +113,9 @@ void ADSR::OnParamModified() {
     attackSamples_ = resolve(attackSeconds_, minAttackSamples_);
     decaySamples_ = resolve(decaySeconds_, minDecaySamples_);
     releaseSamples_ = resolve(releaseSeconds_, minReleaseSamples_);
-    // vcvt.s32.f32, then strh: the low 16 bits of the integer.
-    sustainQ15_ = static_cast<short>(static_cast<int>(sustainLevel_ * 32767.0f));
+    // vcvt.s32.f32, then strh: the low 16 bits of the saturated integer. The
+    // amplitude envelopes' constructor sustain of 16777215.0 lands on 0xFFFF.
+    sustainQ15_ = static_cast<short>(toInt(sustainLevel_ * 32767.0f));
 }
 
 void ADSR::SetMinSamples(uint attack, uint decay, uint release) {

@@ -83,9 +83,9 @@ public:
     // false, changing nothing, for an id this class does not model.
     bool set(int id, float value);
 
-    // Every modelled control set to its default through set(). Whether the
-    // engine's constructor reaches OnChildModified this way is derived, not
-    // read (SubSynthControls.md).
+    // Every modelled control set to its default through set(), as the
+    // engine's constructor does: each default SetValue there reaches
+    // OnChildModified.
     void resetToDefaults();
 
     // What the control stores and saves (GetSerializeValue).
