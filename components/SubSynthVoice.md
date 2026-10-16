@@ -180,5 +180,31 @@ It then notifies the pattern editor. None of this changes the voice DSP;
 `SubSynth::setPolyphony` implements it, and `components/SubSynth.md` covers
 what `+0xC2F8` and `+0xC2F9` gate.
 
-## Not established
+## Checked against the original
+
+`SubSynth::Process` is identical to the 3.2.0 (beta 7) armv7 library, block
+for block, in 18 scenarios. The emulated side is the whole machine: the
+original constructor, including the control defaults it applies through
+`OnChildModified`, with the original `ProcessPendingNotes`, `PlayChannel`,
+`ProcessChannel`, `ApplyVCA` and `Mixer::MixCrossfade`. The reconstruction
+is `SubSynth` with `SubSynthControls::resetToDefaults()`. The scenarios set
+controls through each control's own `SetValue` and cover:
+
+- one note held and released, a chord, voice stealing, and two-voice and
+  monophonic polyphony;
+- every oscillator type but the custom ones, oscillator 2 detuned, both
+  modulation modes, and cents mode;
+- every filter type including the inverted ones, envelopes and output
+  volume;
+- LFOs on cutoff, pitch, volume and phase;
+- pitch bend and pitch sweep;
+- blocks of 1 to 128 samples.
+
+The one change it needed was in the constructor: the filter envelopes' 10,
+20 and 200 sample minimums, and the amplitude envelopes' values, are now
+set as the engine sets them (`SubSynth.cpp`).
+
+Running the original also needs `UIKeyboard`'s constructor. It fills the
+note-frequency table that `PlayChannel` reads through
+`UIKeyboard::GetFrequencyFromNoteId`, and SubSynth builds a keyboard.
 
