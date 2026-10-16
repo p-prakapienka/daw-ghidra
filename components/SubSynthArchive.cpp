@@ -226,7 +226,16 @@ std::optional<SubSynthArchive> SubSynthArchive::read(std::span<const std::uint8_
                     fail(error, "truncated custom waveform");
                     return std::nullopt;
                 }
-                point = static_cast<std::int16_t>(static_cast<std::int32_t>(value));
+                // vcvt.s32.f32 clamps to the int range (NaN to 0); strh keeps the low half.
+                std::int32_t whole = 0;
+                if (value >= 2147483648.0f) {
+                    whole = 0x7FFFFFFF;
+                } else if (value <= -2147483648.0f) {
+                    whole = -0x7FFFFFFF - 1;
+                } else if (value == value) {
+                    whole = static_cast<std::int32_t>(value);
+                }
+                point = static_cast<std::int16_t>(whole);
             }
         } else if (!readWaveformShorts(reader, first)) {
             fail(error, "truncated custom waveform");

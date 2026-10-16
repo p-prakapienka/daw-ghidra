@@ -25,12 +25,12 @@ samples = clamp((uint)vcvt(seconds * 44100.0f), minSamples, 220500)
 sustainQ15 = (short)vcvt(sustain * 32767.0f)
 ```
 
-`vcvt` is `vcvt.s32.f32`: it truncates and saturates at both ends, so an
+`vcvt` is `vcvt.s32.f32`: it truncates and clamps at both ends, so an
 oversized sustain becomes `0x7FFFFFFF` and keeps `0xFFFF`. SubSynth's
 amplitude envelopes are built with a sustain of 16777215.0, so their
 `sustainQ15` is −1 until the Sustain control's default replaces it. A plain
 C++ cast would be undefined there, and gives `INT_MIN` on x86 (low half 0),
-so the component saturates explicitly.
+so the component clamps explicitly.
 
 - `44100.0f` and `32767.0f` are literals in the function's constant pool at
   `0x806f4` and `0x806f8`. The sample rate is **hardcoded**; the envelope does
@@ -113,7 +113,7 @@ With the gate set:
   - the start level (`0x58`);
   - the sustain (`0x5C`);
   - both steps, as `(int)(16777216.0f / (float)length)` in float,
-    saturating.
+    clamping at both ends.
 
   **Correction:** the steps used to be integer `0x1000000 / length`.
 
@@ -130,11 +130,11 @@ fade in with the weight `(int)((float)position / (float)fadeLength * 32767)`.
 The curves differ in what they fade from:
 
 - **Linear and exponential** fade from the sample they wrote last, so the
-  fade is recursive: `out = prev + (w * sat16(shaped − prev) >> 15)`, with
+  fade is recursive: `out = prev + (w * clamp16(shaped − prev) >> 15)`, with
   `prev` updated each sample and stored back to `0x56`.
 - **Logarithmic** first copies `0x5A` into `0x56` and fades from that fixed
   level. Its shaped value is offset and then doubled with 16-bit wrap:
-  `sat16` of the offset value maps ≥ 0x8000 to −2 and < −0x7FFF to 2.
+  `clamp16` of the offset value maps ≥ 0x8000 to −2 and < −0x7FFF to 2.
 
 **Correction:** the fade used to blend from one fixed level for every curve.
 
@@ -146,7 +146,7 @@ After the fade:
 | Exponential | `start + sbfx15(s2 * span)`, where `s2 = (s * s >> 15) & 0xFFFF` and `s = (ramp >> 9) & 0xFFFF` |
 | Logarithmic | `start + sbfx15((log(s) << 1) * span)`, where `s = (ramp >> 10) & 0xFFFF` |
 
-Every value is saturated to ±0x7FFF.
+Every value is clamped to ±0x7FFF.
 
 ### Decay and sustain
 

@@ -18,6 +18,7 @@
 #include <cstdint>
 #include <mutex>
 
+#include "CustomWaveform.h"
 #include "LFO.h"
 #include "SequencerKeyEvent.h"
 #include "SubSynthVoice.h"
@@ -50,6 +51,18 @@ public:
     std::array<SubSynthVoice, kVoiceSlots> voices;
     LFO lfo1; // +0x36E4
     LFO lfo2; // +0x3724
+
+    // The two custom waveform editors (+0xC2A4, +0xC2A8). Oscillator types 7
+    // and 8 play the tables they fill.
+    std::array<CustomWaveform, 2> customWaveforms;
+
+    // RefreshCustomWavetable: editor 0 into the table at +0x2F78, editor 1
+    // into +0x2F7C, as GetWaveform(table, 4096, 0.3). Other indices do
+    // nothing.
+    void refreshCustomWavetable(int index);
+    const std::array<short, Oscillator::kTableSize> &customWavetable(int index) const {
+        return customWavetables_[static_cast<std::size_t>(index)];
+    }
 
     // "Filter Kb track", read from its control on every note-on.
     float keyboardTracking = 0.0f;
@@ -149,6 +162,9 @@ private:
     bool flagC2FA_ = false;
 
     bool sustain_ = false; // +0x2F04
+
+    // +0x2F78, +0x2F7C: new short[4096] each, cleared by the constructor.
+    std::array<std::array<short, Oscillator::kTableSize>, 2> customWavetables_{};
 
     LFO::Target lfo1Target_ = LFO::Target::None;
     LFO::Target lfo2Target_ = LFO::Target::None;

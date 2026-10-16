@@ -99,6 +99,14 @@ public:
     Oscillator();
 
     void setType(Type type);
+
+    // The tables types 7 and 8 play (+0x2C, +0x30). SubSynth points both of
+    // its oscillators at its two custom wavetables. SetOscillatorType copies
+    // the pointer when the type is chosen, so set these first.
+    void setCustomTables(const short *first, const short *second) {
+        customTables_[0] = first;
+        customTables_[1] = second;
+    }
     Type type() const { return type_; }
 
     void setModulationMode(ModulationMode mode) { modulationMode_ = mode; }
@@ -150,6 +158,7 @@ private:
     ModulationMode modulationMode_ = ModulationMode::Frequency;
     const short *table_ = nullptr;
     const short *bandTable_ = nullptr;
+    const short *customTables_[2] = {nullptr, nullptr};
     uint band_ = 0;
     int bandWeight_ = 0;
     float pitchRatio_ = 1.0f;

@@ -323,7 +323,7 @@ TEST(SubSynthConstruction, EnvelopesStartAsTheEngineSetsThem) {
         EXPECT_EQ(voice.filterEnvelope.decaySamples(), 20u);
         EXPECT_EQ(voice.filterEnvelope.releaseSamples(), 88200u);
         EXPECT_FALSE(voice.filterEnvelope.startsFromCurrentLevel());
-        // Sustain 16777215.0 saturates to 0xFFFF until the controls replace it.
+        // Sustain 16777215.0 clamps to 0xFFFF until the controls replace it.
         EXPECT_EQ(voice.amplitudeEnvelope.sustainQ15(), -1);
         EXPECT_TRUE(voice.amplitudeEnvelope.startsFromCurrentLevel());
     }

@@ -73,8 +73,10 @@ exist precisely because these alias.
 | 7 | instance pointer at `+0x2C` | no |
 | 8 | instance pointer at `+0x30` | no |
 
-Values 7 and 8 are the two custom wavetables, which matches SubSynth storing two
-660-entry custom waveforms per preset. `GenerateSignal` itself is a 64-byte
+Values 7 and 8 are the two custom wavetables. SubSynth points both of its
+oscillators' `+0x2C` and `+0x30` at its two 4096-short tables, which its
+custom waveform editors fill (`CustomWaveform.md`); `setCustomTables` does the
+same here. The pointer is copied into `+0x28` when the type is chosen. `GenerateSignal` itself is a 64-byte
 dispatcher: it reads the HQ flag and tail-calls `GenerateSignalHQ` or
 `GenerateSignalLQ`.
 
@@ -292,13 +294,13 @@ The fraction is clamped to 0..1, and the prologue turns it into a Q14 weight,
 one and the next narrower one, and blends them:
 
 ```
-lower  = sat16(b[i][band]   + (sat16(b[i+1][band]   - b[i][band])   * frac >> 15))
-upper  = sat16(b[i][band+1] + (sat16(b[i+1][band+1] - b[i][band+1]) * frac >> 15))
-value  = lower + (weight * sat16(upper - lower) >> 15)
+lower  = clamp16(b[i][band]   + (clamp16(b[i+1][band]   - b[i][band])   * frac >> 15))
+upper  = clamp16(b[i][band+1] + (clamp16(b[i+1][band+1] - b[i][band+1]) * frac >> 15))
+value  = lower + (weight * clamp16(upper - lower) >> 15)
 out[i] = clampQ24(value << 9)
 ```
 
-where `sat16` saturates to ±0x7FFF as the LQ difference does. Band 7 is only
+where `clamp16` clamps to ±0x7FFF as the LQ difference does. Band 7 is only
 ever the upper half of a blend.
 
 **Correction:** this component used to pick a single band, the widest whose
@@ -320,9 +322,8 @@ scenario ran three consecutive blocks and covered:
 Each block compared the output and the control voltage afterwards, on the
 3.2.0 (beta 7) armv7 library.
 
-## Not in this pass
-
-The custom wavetables at types 7 and 8.
+Types 7 and 8 are checked as part of SubSynth (`SubSynthVoice.md`), with
+drawn waveforms in both editors.
 
 ## Measured
 
