@@ -7,8 +7,11 @@
 namespace ableton::engine {
 
     struct ClipTimeNode {
+        // 0x30 bytes. The playing clip's start in song time plus its region; the launcher sends it
+        // (wrapped in an optional) whenever the playing clip changes. Field names are ours.
         struct PlayingClipFrame {
-            // TODO: fields
+            Beats sessionClipStartTime{};    // 0x00
+            transport::ClipRegion region;    // 0x08
         };
 
         void sendTimelines(ProcessContext const&, EventBuffer<transport::Segment, Frames, NoopEventBufferOverflowHandler<transport::Segment, Frames>> const&, CvBuffer<ableton::time::Timeline, Frames>&);  // @0xec294 -> decomp/ClipTimeNode_sendTimelines__00000000000ec294.c

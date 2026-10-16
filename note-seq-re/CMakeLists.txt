@@ -45,6 +45,7 @@ if (NOTE_SEQ_RE_BUILD_TESTS)
 
   enable_testing()
   add_executable(note_seq_re_tests
+    tests/LauncherNodeStateTest.cpp
     tests/LauncherNodeTest.cpp
     tests/TransportFunctionsTest.cpp
   )
