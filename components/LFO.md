@@ -27,6 +27,7 @@ From the constructor:
 | 0x20 | tempo in BPM | 120.0 |
 | 0x24 | written `0x00FFFFFF`, not read by `GenerateInternal` | |
 | 0x28 | phase offset, Q24 | 0 |
+| 0x2C | zeroed by the constructor, not read by `GenerateInternal` | 0 |
 | 0x30 | smoothed value for sawtooth and square | 0 |
 | 0x34 | last unsmoothed value | 0 |
 | 0x38 | smoothing coefficient, Q24 | `0x00FD70A3` (0.99) |
@@ -118,9 +119,24 @@ only oscillator 1 has its FM depth modulated. `SubSynthRouting::connect` in
 `components/SubSynthVoice.h` performs the wiring; `LFO::Target` records the
 numbering.
 
+## Checked against the original
+
+`OnParamModified`, `SetBPM` and `GenerateInternal` are identical to the
+3.2.0 (beta 7) armv7 library in 100 scenarios. Each compared the period and
+every output block. They covered:
+
+- all four waveforms at rates 0, 3, 6 and 12;
+- half and zero depth, a phase offset, a fractional rate, and a rate past the
+  division table and below zero;
+- two other tempos and an unknown waveform;
+- four runs of blocks each: contiguous 128-sample blocks, 16-sample blocks, a
+  jump in song position, and an odd start with 100-sample blocks.
+
+No change was needed.
+
 ## Not established
 
-What reads `+0x24`.
+What reads `+0x24` and `+0x2C`.
 
 The Volume input at SubSynth `+0x3764` turned out not to involve `ApplyVCA`:
 `ProcessChannel`'s output loop scales every sample by `1 + value`, after the
