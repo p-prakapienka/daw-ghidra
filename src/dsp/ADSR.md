@@ -17,10 +17,35 @@ Sibling classes `AREnvelope` and `DecayEnvelope` have the same five-method
 shape and are cut-down versions of this one.
 
 All three derive from `Envelope` (typeinfo), whose vtable holds only `IsDone`
-and `GenerateValues`, with no destructor. `ADSR` derives from it here too
-(`src/dsp/Envelope.h`), with `IsDone` non-const as the engine's virtual is, so
-`FixedPointSVFilter` can call a voice's filter envelope through
-`Envelope*`.
+and `GenerateValues`, with no destructor.
+
+## The port
+
+`ADSR` is ported to the original's structure (`dsp/ADSR.h`):
+
+- **Base class.** It derives from `Envelope`, with `IsDone` non-const as the
+  engine's virtual is, so `FixedPointSVFilter` can call a voice's filter
+  envelope through `Envelope*`.
+- **Methods.** The five methods have the engine's names and signatures.
+- **Members.** They are public, at the engine's offsets and types (`0x64`
+  bytes on a 32-bit build, checked by `static_assert`). Their names are ours.
+  SubSynth writes the parameters and then calls `OnParamModified`, as the
+  engine does.
+- **`GenerateValues`** is one function, as in the engine: the gate picks the
+  release path or the held path.
+
+The constructor (`0x806fc`):
+
+- writes the four parameters (0, 0, 1, 0), the three curves (1) and the
+  three minimums (80);
+- clears the state fields and sets `m_bIdle`;
+- calls `OnParamModified`.
+
+It never writes the latched lengths at `0x20`–`0x28`; they are zeroed here.
+
+**Correction:** `m_sNoteSustain` starts at 0, as the constructor writes it,
+not at full scale. A note latches it before reading it, so nothing audible
+changes.
 
 ## Parameters
 
@@ -196,23 +221,23 @@ reading outside the buffer.
   each segment, odd block sizes, never held, and a jump in position;
 - **both values of `0x61`.**
 
-## Known member offsets
+## Layout
 
-| Offset | Meaning |
-| --- | --- |
-| 0x04, 0x08, 0x0C, 0x10 | attack, decay seconds; sustain 0..1; release seconds |
-| 0x14, 0x18, 0x1C | resolved attack, decay, release lengths in samples |
-| 0x20, 0x24, 0x28 | lengths latched for the note in flight |
-| 0x2C, 0x30, 0x34 | minimum lengths, default 0x50 |
-| 0x38 | last position seen, used to detect a retrigger |
-| 0x3C, 0x40, 0x44 | attack, decay, release shape |
-| 0x48, 0x4C, 0x50 | attack, decay, release step in the 24-bit domain |
-| 0x54 | sustain as Q15 |
-| 0x56 | last value written |
-| 0x58 | level the attack starts from |
-| 0x5A | level of the previous note, for the retrigger fade |
-| 0x5C | sustain latched for the note in flight |
-| 0x5E | level captured at note-off |
-| 0x60 | note is held |
-| 0x61 | a new note starts from the current level, and backward positions do not retrigger |
-| 0x62 | envelope is idle |
+| Offset | Member | Meaning |
+| --- | --- | --- |
+| 0x04, 0x08, 0x0C, 0x10 | `m_fAttack`, `m_fDecay`, `m_fSustain`, `m_fRelease` | attack, decay seconds; sustain 0..1; release seconds |
+| 0x14, 0x18, 0x1C | `m_nAttackSamples`, `m_nDecaySamples`, `m_nReleaseSamples` | resolved lengths in samples |
+| 0x20, 0x24, 0x28 | `m_nNoteAttackSamples`, `m_nNoteDecaySamples`, `m_nNoteReleaseSamples` | lengths latched for the note in flight |
+| 0x2C, 0x30, 0x34 | `m_nMinAttackSamples`, `m_nMinDecaySamples`, `m_nMinReleaseSamples` | minimum lengths, default 0x50 |
+| 0x38 | `m_nLastPosition` | last position seen, used to detect a retrigger |
+| 0x3C, 0x40, 0x44 | `m_nAttackCurve`, `m_nDecayCurve`, `m_nReleaseCurve` | 0 logarithmic, 1 linear (the default), 2 exponential |
+| 0x48, 0x4C, 0x50 | `m_nAttackStep`, `m_nDecayStep`, `m_nReleaseStep` | step in the 24-bit domain |
+| 0x54 | `m_sSustain` | sustain as Q15 |
+| 0x56 | `m_sLast` | last value written |
+| 0x58 | `m_sAttackStart` | level the attack starts from |
+| 0x5A | `m_sPrevious` | level of the previous note, for the retrigger fade |
+| 0x5C | `m_sNoteSustain` | sustain latched for the note in flight |
+| 0x5E | `m_sReleaseStart` | level captured at note-off |
+| 0x60 | `m_bHeld` | note is held |
+| 0x61 | `m_bStartFromCurrent` | a new note starts from the current level, and backward positions do not retrigger |
+| 0x62 | `m_bIdle` | envelope is idle |

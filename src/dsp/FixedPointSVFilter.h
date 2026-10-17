@@ -12,6 +12,8 @@
 // SubSynth writes them directly. Their names
 // are ours, in the engine's Hungarian style; the offsets are the engine's.
 
+#include <cstdint>
+
 #include "dsp/ControlVoltage.h"
 #include "dsp/LFO.h"
 #include "dsp/Envelope.h"

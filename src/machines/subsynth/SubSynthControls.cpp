@@ -361,16 +361,16 @@ void SubSynthControls::applyEffect(int id) {
             ADSR &envelope = id <= 24 ? voice.filterEnvelope : voice.amplitudeEnvelope;
             switch ((id - 21) % 4) {
             case 0:
-                envelope.setAttackSeconds(v);
+                envelope.m_fAttack = v;
                 break;
             case 1:
-                envelope.setDecaySeconds(v);
+                envelope.m_fDecay = v;
                 break;
             case 2:
-                envelope.setSustainLevel(v);
+                envelope.m_fSustain = v;
                 break;
             default:
-                envelope.setReleaseSeconds(v);
+                envelope.m_fRelease = v;
                 break;
             }
             envelope.OnParamModified();

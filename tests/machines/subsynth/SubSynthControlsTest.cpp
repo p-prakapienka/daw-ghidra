@@ -78,11 +78,11 @@ TEST(SubSynthControlTable, SquareKnobsReachTheEngineSquared) {
     EXPECT_EQ(rig.controls.position(25), 1.5f);
     EXPECT_EQ(rig.controls.value(25), 2.25f);
     for (const auto &voice : rig.synth->voices) {
-        EXPECT_EQ(voice.amplitudeEnvelope.attackSeconds(), 2.25f);
+        EXPECT_EQ(voice.amplitudeEnvelope.m_fAttack, 2.25f);
     }
     // Sustain is linear.
     rig.controls.set(23, 0.5f);
-    EXPECT_EQ(rig.synth->voices[15].filterEnvelope.sustainLevel(), 0.5f);
+    EXPECT_EQ(rig.synth->voices[15].filterEnvelope.m_fSustain, 0.5f);
 }
 
 TEST(SubSynthControlTable, SelectorsTruncateAndClamp) {
@@ -257,7 +257,7 @@ TEST(SubSynthControlLoad, AppliesControlsThenModes) {
     EXPECT_EQ(rig.synth->shared.oscillator1.modulationMode(), Oscillator::ModulationMode::Phase);
     EXPECT_EQ(rig.synth->polyphony(), 2);
     // Current version: no fix-up, the position is squared.
-    EXPECT_EQ(rig.synth->voices[0].amplitudeEnvelope.attackSeconds(), 1.2f * 1.2f);
+    EXPECT_EQ(rig.synth->voices[0].amplitudeEnvelope.m_fAttack, 1.2f * 1.2f);
     EXPECT_EQ(rig.synth->shared.voiceGain, 0.25f);
 }
 
@@ -269,13 +269,13 @@ TEST(SubSynthControlLoad, OldTimesComeBackAsSeconds) {
     rig.controls.load(archive);
 
     const ADSR &envelope = rig.synth->voices[0].amplitudeEnvelope;
-    EXPECT_NEAR(envelope.attackSeconds(), 1.2f, 1e-6f);
+    EXPECT_NEAR(envelope.m_fAttack, 1.2f, 1e-6f);
     EXPECT_EQ(rig.controls.position(25), std::sqrt(std::sqrt(1.2f * 1.2f)));
     // The collection clamps the stored 3.0 to the knob's 1.75 before the
     // fix-up runs, so the time comes back as 1.75 s.
-    EXPECT_NEAR(envelope.releaseSeconds(), 1.75f, 1e-6f);
+    EXPECT_NEAR(envelope.m_fRelease, 1.75f, 1e-6f);
     // Sustain is not touched.
-    EXPECT_EQ(envelope.sustainLevel(), 0.5f);
+    EXPECT_EQ(envelope.m_fSustain, 0.5f);
 }
 
 TEST(SubSynthControlLoad, OldWaveformsAreRenumbered) {
@@ -302,8 +302,8 @@ TEST(SubSynthControlLoad, DefaultsReachTheEngine) {
     Rig rig;
     rig.controls.resetToDefaults();
     EXPECT_EQ(rig.synth->lfo1.rate(), 6.0f);
-    EXPECT_EQ(rig.synth->voices[3].filterEnvelope.releaseSeconds(), 1.75f * 1.75f);
-    EXPECT_EQ(rig.synth->voices[3].amplitudeEnvelope.sustainLevel(), 1.0f);
+    EXPECT_EQ(rig.synth->voices[3].filterEnvelope.m_fRelease, 1.75f * 1.75f);
+    EXPECT_EQ(rig.synth->voices[3].amplitudeEnvelope.m_fSustain, 1.0f);
     EXPECT_EQ(rig.synth->shared.voiceGain, 1.0f);
     EXPECT_EQ(rig.synth->shared.bend, 1.0f);
     EXPECT_EQ(rig.synth->shared.mixQ24, static_cast<std::int32_t>(0.5f * 16777215.0f));
