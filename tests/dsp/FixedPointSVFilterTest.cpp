@@ -270,7 +270,7 @@ TEST(FixedPointSVFilterControlBlock, KeyboardTrackingReachesTheCutoff) {
 
 TEST(FixedPointSVFilterControlBlock, ModulationLiftsTheCutoffMultiplicatively) {
     Rig rig;
-    rig.modulation.output()[0] = kFullScale; // +1.0 in Q24 roughly doubles it
+    rig.modulation.m_pnOutput[0] = kFullScale; // +1.0 in Q24 roughly doubles it
     rig.filter.m_nMode = 1;
     rig.filter.m_fCutoff = 0.3f;
     rig.controlBlock();
@@ -296,7 +296,7 @@ TEST(FixedPointSVFilterControlBlock, RefreshesEverySixteenSamples) {
     rig.filter.m_fCutoff = 0.3f;
     // The modulation doubles the cutoff from sample 16 on.
     for (int index = 16; index < 64; ++index) {
-        rig.modulation.output()[index] = kFullScale;
+        rig.modulation.m_pnOutput[index] = kFullScale;
     }
     std::vector<int> buffer(16, kUnit);
     rig.filter.ProcessCV(&rig.voltage, buffer.data(), 16, 1);
@@ -305,7 +305,7 @@ TEST(FixedPointSVFilterControlBlock, RefreshesEverySixteenSamples) {
     longer.filter.m_nMode = 1;
     longer.filter.m_fCutoff = 0.3f;
     for (int index = 16; index < 64; ++index) {
-        longer.modulation.output()[index] = kFullScale;
+        longer.modulation.m_pnOutput[index] = kFullScale;
     }
     std::vector<int> more(17, kUnit);
     longer.filter.ProcessCV(&longer.voltage, more.data(), 17, 1);

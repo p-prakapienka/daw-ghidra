@@ -117,14 +117,14 @@ TEST(SubSynthRouting, EachTargetReachesItsInput) {
     LFO lfo2;
     SubSynthRouting routing =
         SubSynthRouting::connect(lfo1, LFO::Target::BothPitch, lfo2, LFO::Target::Volume);
-    EXPECT_EQ(routing.oscillator1.vibrato, lfo1.output());
-    EXPECT_EQ(routing.oscillator2.vibrato, lfo1.output());
-    EXPECT_EQ(routing.volume, lfo2.output());
+    EXPECT_EQ(routing.oscillator1.vibrato, lfo1.m_pnOutput);
+    EXPECT_EQ(routing.oscillator2.vibrato, lfo1.m_pnOutput);
+    EXPECT_EQ(routing.volume, lfo2.m_pnOutput);
 
     routing = SubSynthRouting::connect(lfo1, LFO::Target::Oscillator2Semitones, lfo2,
                                        LFO::Target::Oscillator1Modulation);
-    EXPECT_EQ(routing.oscillator2.semitones, lfo1.output());
-    EXPECT_EQ(routing.oscillator1.fmDepth, lfo2.output());
+    EXPECT_EQ(routing.oscillator2.semitones, lfo1.m_pnOutput);
+    EXPECT_EQ(routing.oscillator1.fmDepth, lfo2.m_pnOutput);
     EXPECT_EQ(routing.oscillator1.semitones, nullptr);
 }
 
@@ -132,17 +132,19 @@ TEST(SubSynthRouting, OctaveTargetStartsTheLFOHalfACycleIn) {
     LFO shifted;
     LFO plain;
     for (LFO *lfo : {&shifted, &plain}) {
-        lfo->setRate(5.0f);
+        lfo->m_fRate = 5.0f;
         lfo->SetBPM(120.0f);
-        lfo->setWaveform(LFO::Waveform::Triangle);
+        lfo->m_nWaveform = LFO::kTriangle;
     }
     SubSynthRouting::connect(shifted, LFO::Target::Oscillator2Octave, plain,
                              LFO::Target::Oscillator2Semitones);
 
-    shifted.generate(0, 1);
-    const int shiftedStart = shifted.output()[0];
-    plain.generate(0, 1);
-    const int plainStart = plain.output()[0];
+    shifted.m_nSongPosition = 0;
+    shifted.GenerateInternal(1);
+    const int shiftedStart = shifted.m_pnOutput[0];
+    plain.m_nSongPosition = 0;
+    plain.GenerateInternal(1);
+    const int plainStart = plain.m_pnOutput[0];
 
     // The triangle starts at its top; half a cycle in, it is at the bottom.
     EXPECT_GT(plainStart, 0);

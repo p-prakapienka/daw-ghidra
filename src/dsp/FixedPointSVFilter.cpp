@@ -59,7 +59,7 @@ void FixedPointSVFilter::ProcessCV(ControlVoltage *pCV, int *pBuffer, unsigned i
             fEnvelope = 1.0f - fEnvelope;
         }
         const float fLift =
-            1.0f + static_cast<float>(m_pModulation->output()[nOffset]) * (1.0f / 16777215.0f);
+            1.0f + static_cast<float>(m_pModulation->m_pnOutput[nOffset]) * (1.0f / 16777215.0f);
 
         UpdateCoefficients(fEnvelope * (fLift * fTrackedCutoff), fEnvelope * m_fResonance);
         nFeedback = 0xFFFFFF - Mul24(m_nDamping, m_nCutoff);

@@ -180,9 +180,9 @@ TEST(SubSynthControlTable, LfoControlsWriteTheirLfo) {
     rig.controls.set(13, 0.5f);
     rig.controls.set(10, 2.0f);
     rig.controls.set(14, 5.0f);
-    EXPECT_EQ(rig.synth->lfo1.rate(), 3.0f);
-    EXPECT_EQ(rig.synth->lfo1.depthQ24(), static_cast<std::int32_t>(0.5f * 16777215.0f));
-    EXPECT_EQ(rig.synth->lfo1.waveform(), LFO::Waveform::Sawtooth);
+    EXPECT_EQ(rig.synth->lfo1.m_fRate, 3.0f);
+    EXPECT_EQ(rig.synth->lfo1.m_nDepth, static_cast<std::int32_t>(0.5f * 16777215.0f));
+    EXPECT_EQ(rig.synth->lfo1.m_nWaveform, LFO::kSawtooth);
     EXPECT_EQ(rig.synth->lfo2Target(), LFO::Target::Cutoff);
     EXPECT_EQ(rig.synth->lfo1Target(), LFO::Target::None);
 }
@@ -301,7 +301,7 @@ TEST(SubSynthControlLoad, IdsWithoutAModelledControlAreIgnored) {
 TEST(SubSynthControlLoad, DefaultsReachTheEngine) {
     Rig rig;
     rig.controls.resetToDefaults();
-    EXPECT_EQ(rig.synth->lfo1.rate(), 6.0f);
+    EXPECT_EQ(rig.synth->lfo1.m_fRate, 6.0f);
     EXPECT_EQ(rig.synth->voices[3].filterEnvelope.m_fRelease, 1.75f * 1.75f);
     EXPECT_EQ(rig.synth->voices[3].amplitudeEnvelope.m_fSustain, 1.0f);
     EXPECT_EQ(rig.synth->shared.voiceGain, 1.0f);

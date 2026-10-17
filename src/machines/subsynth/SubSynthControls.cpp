@@ -298,29 +298,29 @@ void SubSynthControls::applyEffect(int id) {
         updateOscillator2Pitch(true);
         break;
     case 10:
-        synth_.lfo1.setWaveform(static_cast<LFO::Waveform>(toInt(v)));
+        synth_.lfo1.m_nWaveform = toInt(v);
         synth_.lfo1.OnParamModified();
         break;
     case 11:
         synth_.setLFOTargets(static_cast<LFO::Target>(toInt(v)), synth_.lfo2Target());
         break;
     case 12:
-        synth_.lfo1.setRate(v);
+        synth_.lfo1.m_fRate = v;
         synth_.lfo1.OnParamModified();
         break;
     case 13:
-        synth_.lfo1.setDepth(v);
+        synth_.lfo1.m_nDepth = toInt(v * 16777215.0f);
         synth_.lfo1.OnParamModified();
         break;
     case 14:
         synth_.setLFOTargets(synth_.lfo1Target(), static_cast<LFO::Target>(toInt(v)));
         break;
     case 15:
-        synth_.lfo2.setRate(v);
+        synth_.lfo2.m_fRate = v;
         synth_.lfo2.OnParamModified();
         break;
     case 16:
-        synth_.lfo2.setDepth(v);
+        synth_.lfo2.m_nDepth = toInt(v * 16777215.0f);
         synth_.lfo2.OnParamModified();
         break;
     case 17:

@@ -15,22 +15,27 @@ LFO::GenerateInternal(unsigned int)    0x807e0   660
 
 From the constructor:
 
-| Offset | Meaning | Default |
-| --- | --- | --- |
-| 0x04 | rate, a float truncated to a division index | 1.0 |
-| 0x08 | depth, Q24 | `0x00FFFFFF` (1.0) |
-| 0x0C | output block, `new int[128]` | — |
-| 0x10 | song position in samples, written each block | 0 |
-| 0x14 | period in samples | computed |
-| 0x18 | position offset, zeroed by `OnParamModified` | 0 |
-| 0x1C | waveform | 0 |
-| 0x20 | tempo in BPM | 120.0 |
-| 0x24 | written `0x00FFFFFF`, not read by `GenerateInternal` | |
-| 0x28 | phase offset, Q24 | 0 |
-| 0x2C | zeroed by the constructor, not read by `GenerateInternal` | 0 |
-| 0x30 | smoothed value for sawtooth and square | 0 |
-| 0x34 | last unsmoothed value | 0 |
-| 0x38 | smoothing coefficient, Q24 | `0x00FD70A3` (0.99) |
+| Offset | Member | Meaning | Default |
+| --- | --- | --- | --- |
+| 0x00 | vtable | `~LFO` (complete, deleting), `GenerateInternal` | |
+| 0x04 | `m_fRate` | rate, a float truncated to a division index | 1.0 |
+| 0x08 | `m_nDepth` | depth, Q24 | `0x00FFFFFF` (1.0) |
+| 0x0C | `m_pnOutput` | output block, `new int[128]` | — |
+| 0x10 | `m_nSongPosition` | song position in samples, written each block | 0 |
+| 0x14 | `m_nPeriod` | period in samples | computed |
+| 0x18 | `m_nPositionOffset` | position offset, zeroed by `OnParamModified` | 0 |
+| 0x1C | `m_nWaveform` | waveform | 0 |
+| 0x20 | `m_fBPM` | tempo in BPM | 120.0 |
+| 0x24 | `m_n24` | written `0x00FFFFFF` by the constructor and `OnParamModified`, not read by `GenerateInternal` | |
+| 0x28 | `m_nPhaseOffset` | phase offset, Q24 | 0 |
+| 0x2C | `m_n2C` | zeroed by the constructor, not read by `GenerateInternal` | 0 |
+| 0x30 | `m_nSmoothed` | smoothed value for sawtooth and square | 0 |
+| 0x34 | `m_nRaw` | last unsmoothed value | 0 |
+| 0x38 | `m_nSmoothing` | smoothing coefficient, Q24 | `0x00FD70A3` (0.99) |
+
+The object is `0x3C` bytes. In SubSynth the three LFOs sit at `+0x36A8`,
+`+0x36E4` and `+0x3724`, with LFO 1's target at `+0x3720` and LFO 2's at
+`+0x3760` right after each.
 
 The 128-int output block is why blocks never exceed 128 samples.
 
@@ -118,6 +123,37 @@ Only oscillator 2 can be phase-, octave- or semitone-modulated by an LFO, and
 only oscillator 1 has its FM depth modulated. `SubSynthRouting::connect` in
 `src/machines/subsynth/SubSynthVoice.h` performs the wiring; `LFO::Target` records the
 numbering.
+
+## The port
+
+`LFO` is ported to the original's structure (`dsp/LFO.h`). It is a root
+class (its typeinfo has no base), whose vtable holds the two destructors and
+`GenerateInternal`:
+
+- **Methods.** `LFO()`, `~LFO()`, `GenerateInternal(unsigned int)`,
+  `OnParamModified()` and `SetBPM(float)` have the engine's signatures.
+- **Members.** They are public at the engine's offsets and types, `0x3C`
+  bytes on a 32-bit build, checked by `static_assert` and with `g++ -m32`.
+  Their names are ours.
+- **How SubSynth drives it.** It writes the rate, depth, waveform and phase
+  offset and then calls `OnParamModified`. Before each block it writes
+  `m_nSongPosition` and calls `GenerateInternal`.
+- **The output block.** It is `new int[128]`, as in the engine. The engine
+  leaves it uninitialised and frees it with scalar `delete` (`0x807ac`).
+  Here it is zeroed and freed with `delete[]`; the zeroing is never visible,
+  because every LFO generates a block before anything reads it.
+- **`GenerateInternal` takes the engine's contract.** It no longer clamps
+  the block to 128 samples (the engine does not), and it guards the modulo
+  against a zero period, where the engine would divide by zero.
+
+**Correction:** `OnParamModified` stores the period as `vcvt.u32.f32` gives
+it, which is 0 for an absurd tempo. The earlier component replaced 0 with 1.
+
+The default modulation source is SubSynth's third LFO. Its constructor
+(`0xa0494`–`0xa04d0`) sets `m_nWaveform` to `0x07FFFFFF` and calls
+`OnParamModified`, sets `m_nDepth` to 0 and calls it again, then runs
+`GenerateInternal(128)`. The "off" waveform writes zeros. `SubSynth` does
+the same with `SubSynthVoice::Shared::defaultSource`.
 
 ## Checked against the original
 

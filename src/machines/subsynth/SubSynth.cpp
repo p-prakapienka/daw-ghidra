@@ -23,6 +23,15 @@ SubSynth::SubSynth() : pitchSweepDecay(kSweepDownDecay) {
     // sustain 16777215.0, and the byte at +0x61 set, so a new note rises from
     // the level the voice is at. The control defaults applied through
     // OnChildModified afterwards replace most of these (SubSynthControls).
+    // The default modulation source (0xa0494-0xa04d0): the "off" waveform and
+    // no depth, each followed by OnParamModified, then one block generated,
+    // so every input that nothing aims at reads zeros.
+    shared.defaultSource.m_nWaveform = LFO::kOff;
+    shared.defaultSource.OnParamModified();
+    shared.defaultSource.m_nDepth = 0;
+    shared.defaultSource.OnParamModified();
+    shared.defaultSource.GenerateInternal(LFO::kBlockSize);
+
     // Both oscillators can play both custom tables (0xa02c0-0xa02e4).
     shared.oscillator1.setCustomTables(customWavetables_[0].data(), customWavetables_[1].data());
     shared.oscillator2.setCustomTables(customWavetables_[0].data(), customWavetables_[1].data());
@@ -359,8 +368,10 @@ void SubSynth::process(int *output, uint numSamples, double songPositionBeats) {
 
     processPendingNotes();
 
-    lfo1.generate(position, numSamples);
-    lfo2.generate(position, numSamples);
+    lfo1.m_nSongPosition = position;
+    lfo1.GenerateInternal(numSamples);
+    lfo2.m_nSongPosition = position;
+    lfo2.GenerateInternal(numSamples);
 
     for (int index = 0; index < polyphony_; ++index) {
         SubSynthVoice &voice = voices[static_cast<uint>(index)];
