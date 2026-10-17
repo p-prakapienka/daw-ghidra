@@ -24,7 +24,7 @@ CPMAddPackage(
         GIT_TAG ${SOUNDTOUCH_GIT_TAG}
 )
 
-option(DAW_GHIDRA_BUILD_TESTS "Build the component tests" ON)
+option(DAW_GHIDRA_BUILD_TESTS "Build the engine tests" ON)
 
 if (DAW_GHIDRA_BUILD_TESTS)
     CPMAddPackage(
@@ -37,26 +37,32 @@ if (DAW_GHIDRA_BUILD_TESTS)
     )
 endif ()
 
-# Reconstructed engine code. src/ holds classes ported to the original's
-# structure; components/ the rest, until each is ported.
-add_library(components STATIC
-        src/FixedPointSVFilter.cpp
-        components/ADSR.cpp
-        components/CustomWaveform.cpp
-        components/Oscillator.cpp
-        components/ControlVoltage.cpp
-        components/LFO.cpp
-        components/SubSynthVoice.cpp
-        components/Keyboard.cpp
-        components/SubSynth.cpp
-        components/SubSynthArchive.cpp
-        components/SubSynthControls.cpp
+# Reconstructed engine code, by role:
+#   core/              Machine, the base of every processor
+#   dsp/               envelopes, LFO, oscillator, filters, control voltage
+#   ui/                the value side of UI classes the engine depends on
+#   sequencer/         sequencer events
+#   machines/subsynth/ SubSynth and its parts
+# Classes ported to the original's structure say so in their header comment;
+# the others reproduce the behaviour through an API of our own.
+add_library(engine STATIC
+        src/dsp/ADSR.cpp
+        src/dsp/ControlVoltage.cpp
+        src/dsp/FixedPointSVFilter.cpp
+        src/dsp/LFO.cpp
+        src/dsp/Oscillator.cpp
+        src/ui/CustomWaveform.cpp
+        src/ui/Keyboard.cpp
+        src/machines/subsynth/SubSynth.cpp
+        src/machines/subsynth/SubSynthArchive.cpp
+        src/machines/subsynth/SubSynthControls.cpp
+        src/machines/subsynth/SubSynthVoice.cpp
 )
 
-target_include_directories(components PUBLIC ${CMAKE_CURRENT_SOURCE_DIR})
-target_compile_features(components PUBLIC cxx_std_20)
+target_include_directories(engine PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/src)
+target_compile_features(engine PUBLIC cxx_std_20)
 
-# Bench executable for listening to and plotting the components.
+# Bench executable for listening to and plotting the engine.
 add_executable(daw_ghidra
         main.cpp
 )
@@ -64,26 +70,26 @@ add_executable(daw_ghidra
 # AAFilter.h lives under soundtouch/source/SoundTouch and is not installed as a
 # public header, so the internal source directory goes on the include path.
 target_include_directories(daw_ghidra PRIVATE ${SoundTouch_SOURCE_DIR}/source/SoundTouch)
-target_link_libraries(daw_ghidra PRIVATE components SoundTouch)
+target_link_libraries(daw_ghidra PRIVATE engine SoundTouch)
 
 if (DAW_GHIDRA_BUILD_TESTS)
     enable_testing()
 
-    add_executable(components_tests
-            tests/ADSRTest.cpp
-            tests/FixedPointSVFilterTest.cpp
-            tests/OscillatorTest.cpp
-            tests/ControlVoltageTest.cpp
-            tests/CustomWaveformTest.cpp
-            tests/LFOTest.cpp
-            tests/SubSynthVoiceTest.cpp
-            tests/SubSynthTest.cpp
-            tests/SubSynthArchiveTest.cpp
-            tests/SubSynthControlsTest.cpp
+    add_executable(engine_tests
+            tests/dsp/ADSRTest.cpp
+            tests/dsp/ControlVoltageTest.cpp
+            tests/dsp/FixedPointSVFilterTest.cpp
+            tests/dsp/LFOTest.cpp
+            tests/dsp/OscillatorTest.cpp
+            tests/ui/CustomWaveformTest.cpp
+            tests/machines/subsynth/SubSynthArchiveTest.cpp
+            tests/machines/subsynth/SubSynthControlsTest.cpp
+            tests/machines/subsynth/SubSynthTest.cpp
+            tests/machines/subsynth/SubSynthVoiceTest.cpp
     )
 
-    target_link_libraries(components_tests PRIVATE components GTest::gtest_main)
+    target_link_libraries(engine_tests PRIVATE engine GTest::gtest_main)
 
     include(GoogleTest)
-    gtest_discover_tests(components_tests)
+    gtest_discover_tests(engine_tests)
 endif ()
