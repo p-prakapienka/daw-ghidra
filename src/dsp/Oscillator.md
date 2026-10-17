@@ -20,6 +20,63 @@ each one is: `m_psSinewaveTable`, `m_psTrianglewaveTable`, `m_psSawtoothTable`,
 `m_psSquarewaveTable`, `m_psHQSawtoothTable`, `m_psHQSquarewaveTable`,
 `m_pasWhitenoiseTable`, and `m_nWaveTableRefCount`.
 
+## The port
+
+`Oscillator` is ported to the original's structure (`dsp/Oscillator.h`).
+
+| From the library | Here |
+|---|---|
+| no typeinfo, no vtable | a plain class |
+| `Oscillator()`, `~Oscillator()`, `SetOscillatorType(OscillatorType)`, `SetModulationMode(ModulationMode)` | the same signatures, with the nested enums `OscillatorType` and `ModulationMode` |
+| `GenerateSignal`, `GenerateSignalLQ`, `GenerateSignalHQ` | the same signatures: `(ControlVoltage*, int, int*, unsigned int, int*, int, float)` |
+| static members `m_psSinewaveTable` … `m_pasWhitenoiseTable`, `m_nWaveTableRefCount` | the same names |
+| free functions `GenerateWavetables`, `DestroyWavetables`, `sinewave`, `trianglewave`, `sawtooth`, `squarewave`, `ASwhitenoise` | the same names and signatures |
+| `WaveTables::FrequencyToWaveTable(float, float*)` | its own class, `dsp/WaveTables.h` |
+
+Members, at the engine's offsets and types (`0x38` bytes on a 32-bit build,
+checked with `static_assert` and `g++ -m32`). The names are ours.
+
+| Offset | Member | Meaning |
+|---|---|---|
+| 0x00 | `m_pVibrato` | LFO: pitch, ±10% |
+| 0x04 | `m_fPitchRatio` | frequency multiplier |
+| 0x08 | `m_pPhase` | LFO: phase offset in table units << 12 |
+| 0x0C | `m_nPhaseOffset` | fixed phase offset in table entries |
+| 0x10 | `m_pOctave` | LFO: whole octaves |
+| 0x14 | `m_pSemitones` | LFO: whole semitones |
+| 0x18 | `m_pFMDepth` | LFO: scales the FM amount |
+| 0x1C | `m_nNoisePosition` | position in the noise table |
+| 0x20 | `m_nType` | `OscillatorType` |
+| 0x24 | `m_nModulationMode` | `ModulationMode`; the constructor leaves it unset |
+| 0x28 | `m_psTable` | the table playing |
+| 0x2C, 0x30 | `m_psCustomTable1`, `m_psCustomTable2` | the custom tables |
+| 0x34 | `m_bHQ` | HQ flag |
+
+- **Constructor.** It builds the shared tables if the reference count is
+  zero, counts itself, zeroes `0x00`–`0x1C`, sets the ratio to 1, and calls
+  `SetOscillatorType(0)`. The destructor frees the tables with the last
+  oscillator.
+- **The sources are LFOs.** Each is read through its output block. SubSynth's
+  `ConnectLFOs` points all five at its default source (an LFO with the "off"
+  waveform), then aims LFOs at chosen inputs. The old component took raw
+  arrays and treated null as "default"; the oscillator now always reads a
+  source.
+- **The octave and semitone work is gated.** It runs only when the octave or
+  the semitone source is not the default, which the engine tests by the
+  source's waveform being `0x07FFFFFF` (`0x8de7c`, `0x8e18c`).
+- **The modulator is always an input buffer.** SubSynth renders oscillator 2
+  with its own output as the input at amount 0, which contributes nothing.
+- **One loop per mode.** `GenerateSignalLQ` and `GenerateSignalHQ` resolve
+  the glide, then run one loop per modulation mode, as the engine does. The
+  HQ prologue picks the band pair; the per-sample table read is the only
+  difference between the two.
+- **Noise.** Noise copies with `memcpy` from the table at the position.
+  Where a block would run past the table, which the engine would not guard,
+  this wraps instead.
+- **Removed.** The standalone API (`setFrequency`, a voiceless `generate`)
+  and the band getters had no counterpart in the engine and are gone.
+  `tests/dsp/OscillatorTest.cpp` wires an oscillator the way SubSynth does.
+
 ## Table construction
 
 `GenerateWavetables` allocates four blocks of `0x2000` bytes — 4096 shorts each
@@ -75,8 +132,19 @@ exist precisely because these alias.
 
 Values 7 and 8 are the two custom wavetables. SubSynth points both of its
 oscillators' `+0x2C` and `+0x30` at its two 4096-short tables, which its
-custom waveform editors fill (`CustomWaveform.md`); `setCustomTables` does the
-same here. The pointer is copied into `+0x28` when the type is chosen. `GenerateSignal` itself is a 64-byte
+custom waveform editors fill (`CustomWaveform.md`). The pointer is copied
+into `+0x28` when the type is chosen.
+
+Three more details of the switch:
+
+- **The type is always stored.** `+0x20` takes any value. Only 0..8, compared
+  unsigned, choose a table, so a negative or larger value changes nothing
+  else.
+- **Noise changes nothing else.** Type 6 clears the HQ flag and keeps the
+  table it had.
+- **SubSynth's oscillator 2 sends −1 for "off".** It calls
+  `SetOscillatorType(value − 1)` even for value 0, so its stored type
+  becomes −1. `GenerateSignal` itself is a 64-byte
 dispatcher: it reads the HQ flag and tail-calls `GenerateSignalHQ` or
 `GenerateSignalLQ`.
 

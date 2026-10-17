@@ -1,477 +1,449 @@
 #include "dsp/Oscillator.h"
 
 #include <cmath>
-#include <algorithm>
 #include <cstdlib>
-#include <cstdint>
-#include <mutex>
-#include <vector>
+#include <cstring>
+
+#include "dsp/WaveTables.h"
+
+short *Oscillator::m_psSinewaveTable = nullptr;
+short *Oscillator::m_psTrianglewaveTable = nullptr;
+short *Oscillator::m_psSawtoothTable = nullptr;
+short *Oscillator::m_psSquarewaveTable = nullptr;
+short *Oscillator::m_psHQSawtoothTable = nullptr;
+short *Oscillator::m_psHQSquarewaveTable = nullptr;
+int *Oscillator::m_pasWhitenoiseTable = nullptr;
+int Oscillator::m_nWaveTableRefCount = 0;
 
 namespace {
 
-struct StateScale {
-    // 1 / 16777215, the Q24 full scale: 0x33800001, one ulp above 2^-24. The
-    // literal GenerateSignalLQ and GenerateSignalHQ load (0x8e1e8).
-    static constexpr float kInverseOne24 = 1.0f / 16777215.0f;
-};
+// 1 / 16777215, the Q24 full scale as GenerateSignalLQ and GenerateSignalHQ
+// load it: 0x33800001, one ulp above 2^-24 (0x8e1e8).
+constexpr float kInverseQ24 = 1.0f / 16777215.0f;
 
-// The generators take a frequency and a level. Passing the rate divided by the
-// table size puts exactly one cycle in the table, which is what the engine does.
-constexpr float kTableFrequency = 10.7666f; // the literal GenerateWavetables passes (0x412C43FE), not 44100 / 4096
-constexpr float kFullScale = 32767.0f;
+// Q12 hertz to a phase increment: 4096 / 44100 (0x8ea2c).
+constexpr float kPitchToIncrement = 4096.0f / 44100.0f;
 
-// Levels the engine passes per waveform. The square is quieter because it
-// carries more energy than a sine at the same peak.
-constexpr float kSineLevel = 0.3f;
-constexpr float kTriangleLevel = 0.4f;
-constexpr float kSawtoothLevel = 0.3f;
-constexpr float kSquareLevel = 0.2f;
-constexpr float kNoiseLevel = 0.4f;
+// The frequency GenerateWavetables passes, the literal 10.7666f
+// (0x412C43FE), close to but not exactly 44100 / 4096.
+constexpr float kTableFrequency = 10.7666f;
 
-std::vector<short> gSine;
-std::vector<short> gTriangle;
-std::vector<short> gSawtooth;
-std::vector<short> gSquare;
-std::vector<short> gHQSawtooth;
-std::vector<short> gHQSquare;
-std::vector<int> gNoise;
-std::once_flag gTablesBuilt;
+// Highest harmonic kept in each HQ band, widest band first.
+constexpr int kBandHarmonics[Oscillator::kBandCount] = {512, 337, 169, 84, 42, 21, 10, 6};
 
-// buf[i] = sin(i * frequency * 2pi / 44100) * level * 32767
-void sinewave(short *buffer, uint length, float frequency, float level) {
-    const double amplitude = static_cast<double>(level * kFullScale);
-    for (uint index = 0; index < length; ++index) {
-        const float phase = static_cast<float>(index) * frequency * 6.2831854820251465f
-                            / Oscillator::kSampleRate;
-        buffer[index] = static_cast<short>(std::sin(static_cast<double>(phase)) * amplitude);
-    }
+inline int Mul24(int a, int b) {
+    return static_cast<int>((static_cast<long long>(a) * static_cast<long long>(b)) >> 24);
 }
 
-// A bare ramp from -1 to 1. Not band limited; the HQ table exists for that.
-void sawtooth(short *buffer, uint length, float level) {
-    const float amplitude = level * kFullScale;
-    for (uint index = 0; index < length; ++index) {
-        const float value =
-            2.0f * static_cast<float>(index) / static_cast<float>(length) - 1.0f;
-        buffer[index] = static_cast<short>(value * amplitude);
+// The engine's 16-bit clamp: at or above 0x8000 gives 0x7FFF, below
+// -0x7FFF gives -0x7FFF.
+inline int Clamp16(int n) {
+    if (n >= 0x8000) {
+        return 0x7FFF;
     }
+    if (n < -0x7FFF) {
+        return -0x7FFF;
+    }
+    return n;
 }
 
-// Alternates sign every half period, where the period is the rate over the
-// requested frequency.
-void squarewave(short *buffer, uint length, float frequency, float level) {
-    const float amplitude = level * kFullScale;
-    const int halfPeriod = static_cast<int>((Oscillator::kSampleRate / frequency) * 0.5f);
+// Q15 to Q24 output with the engine's clamp.
+inline int ToOutput(int n) {
+    if (n >= 0x8000) {
+        return 0xFFFE00;
+    }
+    if (n < -0x7FFF) {
+        return -0xFFFE00;
+    }
+    return n << 9;
+}
 
-    float sign = -1.0f;
-    int countdown = halfPeriod;
-    for (uint index = 0; index < length; ++index) {
-        buffer[index] = static_cast<short>(sign * amplitude);
-        if (--countdown <= 0) {
-            countdown = halfPeriod;
-            sign = -sign;
+// One HQ table: eight band-limited cycles, each a literal sum of sines at
+// amplitude 1/h up to the band's harmonic limit, interleaved so band b of
+// step i is at table[i * 8 + b].
+void BuildBandLimited(short *psTable, int nHarmonicStep, float fLevel) {
+    static float afSine[Oscillator::kTableSize];
+    static float afSum[Oscillator::kTableSize];
+    for (unsigned int i = 0; i < Oscillator::kTableSize; i++) {
+        afSine[i] = std::sin(2.0f * 3.14159265358979f * static_cast<float>(i)
+                             / static_cast<float>(Oscillator::kTableSize));
+    }
+    for (unsigned int nBand = 0; nBand < Oscillator::kBandCount; nBand++) {
+        std::memset(afSum, 0, sizeof afSum);
+        for (int h = 1; h < kBandHarmonics[nBand]; h += nHarmonicStep) {
+            const float fAmplitude = 1.0f / static_cast<float>(h);
+            unsigned int nPosition = 0;
+            for (unsigned int i = 0; i < Oscillator::kTableSize; i++) {
+                afSum[i] += fAmplitude * afSine[nPosition % Oscillator::kTableSize];
+                nPosition += static_cast<unsigned int>(h);
+            }
         }
+        float fPeak = 0.0f;
+        for (const float f : afSum) {
+            fPeak = f > fPeak ? f : fPeak;
+        }
+        if (fPeak <= 0.0f) {
+            fPeak = 1.0f;
+        }
+        for (unsigned int i = 0; i < Oscillator::kTableSize; i++) {
+            psTable[i * Oscillator::kBandCount + nBand] =
+                static_cast<short>(-afSum[i] / fPeak * fLevel * 32767.0f);
+        }
+    }
+}
+
+} // namespace
+
+// buf[i] = sin(i * frequency * 2pi / 44100) * level * 32767, in double.
+void sinewave(short *pBuffer, unsigned int nLength, float fFrequency, float fLevel) {
+    const double dAmplitude = static_cast<double>(fLevel * 32767.0f);
+    for (unsigned int i = 0; i < nLength; i++) {
+        const float fPhase = static_cast<float>(i) * fFrequency * 6.2831854820251465f / 44100.0f;
+        pBuffer[i] = static_cast<short>(std::sin(static_cast<double>(fPhase)) * dAmplitude);
     }
 }
 
 // Walks up and down between the level bounds at a constant rate.
-void trianglewave(short *buffer, uint length, float frequency, float level) {
-    const float amplitude = level * kFullScale;
-    const auto halfPeriod = static_cast<float>(
-        static_cast<int>((Oscillator::kSampleRate / frequency) * 0.5f));
-    const float step = (level / halfPeriod) * 2.0f;
-
-    float value = 0.0f;
-    bool rising = true;
-    for (uint index = 0; index < length; ++index) {
-        buffer[index] = static_cast<short>((value / level) * amplitude);
-        value += rising ? step : -step;
-        if (value >= level) {
-            value = level;
-            rising = false;
-        } else if (value <= -level) {
-            value = -level;
-            rising = true;
+void trianglewave(short *pBuffer, unsigned int nLength, float fFrequency, float fLevel) {
+    const float fAmplitude = fLevel * 32767.0f;
+    const auto fHalfPeriod = static_cast<float>(static_cast<int>((44100.0f / fFrequency) * 0.5f));
+    const float fStep = (fLevel / fHalfPeriod) * 2.0f;
+    float fValue = 0.0f;
+    bool bRising = true;
+    for (unsigned int i = 0; i < nLength; i++) {
+        pBuffer[i] = static_cast<short>((fValue / fLevel) * fAmplitude);
+        fValue += bRising ? fStep : -fStep;
+        if (fValue >= fLevel) {
+            fValue = fLevel;
+            bRising = false;
+        } else if (fValue <= -fLevel) {
+            fValue = -fLevel;
+            bRising = true;
         }
     }
 }
 
-// ASwhitenoise(int*, unsigned int, float): a fixed-seed add/xor generator, not
-// lrand48. The seeds are the MD5 initial constants. Output is Q24:
-// (int)(a * level * 2^-31 * 16777215) for each successive value of a.
-void whitenoise(int *buffer, uint length, float level) {
-    const float scale = level * 4.656612873077393e-10f; // level / 2^31
+// A bare ramp from -1 to 1 over the buffer; the frequency is not used.
+void sawtooth(short *pBuffer, unsigned int nLength, float /*fFrequency*/, float fLevel) {
+    const float fAmplitude = fLevel * 32767.0f;
+    for (unsigned int i = 0; i < nLength; i++) {
+        const float fValue = 2.0f * static_cast<float>(i) / static_cast<float>(nLength) - 1.0f;
+        pBuffer[i] = static_cast<short>(fValue * fAmplitude);
+    }
+}
+
+// Alternates sign every half period, the rate over the frequency.
+void squarewave(short *pBuffer, unsigned int nLength, float fFrequency, float fLevel) {
+    const float fAmplitude = fLevel * 32767.0f;
+    const int nHalfPeriod = static_cast<int>((44100.0f / fFrequency) * 0.5f);
+    float fSign = -1.0f;
+    int nCountdown = nHalfPeriod;
+    for (unsigned int i = 0; i < nLength; i++) {
+        pBuffer[i] = static_cast<short>(fSign * fAmplitude);
+        if (--nCountdown <= 0) {
+            nCountdown = nHalfPeriod;
+            fSign = -fSign;
+        }
+    }
+}
+
+// A fixed-seed add/xor generator seeded with the MD5 initial constants, not
+// lrand48. Output is Q24: (int)(a * level * 2^-31 * 16777215).
+void ASwhitenoise(int *pBuffer, unsigned int nLength, float fLevel) {
+    const float fScale = fLevel * 4.656612873077393e-10f;
     std::uint32_t a = 0xEFCDAB89u;
     std::uint32_t b = 0x67452301u;
-    for (uint index = 0; index < length; ++index) {
-        const auto value = static_cast<float>(static_cast<std::int32_t>(a));
+    for (unsigned int i = 0; i < nLength; i++) {
+        const auto fValue = static_cast<float>(static_cast<std::int32_t>(a));
         b ^= a;
         a += b;
-        buffer[index] = static_cast<int>(value * scale * 16777215.0f);
+        pBuffer[i] = static_cast<int>(fValue * fScale * 16777215.0f);
     }
 }
 
-// Each HQ table is eight band-limited cycles, built once at GenerateWavetables.
-// A band is a literal sum of sines at amplitude 1/h up to kBandHarmonics[band]
-// — not an FFT. Playback never sums sines; it reads the baked table.
-// The engine writes the bands interleaved: band b of phase step i lives at
-// table[i * kBandCount + b].
-void buildBandLimited(std::vector<short> &table, int harmonicStep, float level) {
-    table.assign(Oscillator::kTableSize * Oscillator::kBandCount, 0);
+void GenerateWavetables() {
+    Oscillator::m_psSquarewaveTable = new short[Oscillator::kTableSize];
+    Oscillator::m_psSinewaveTable = new short[Oscillator::kTableSize];
+    Oscillator::m_psSawtoothTable = new short[Oscillator::kTableSize];
+    Oscillator::m_psTrianglewaveTable = new short[Oscillator::kTableSize];
+    Oscillator::m_pasWhitenoiseTable = new int[Oscillator::kNoiseTableSize];
+    Oscillator::m_psHQSawtoothTable = new short[Oscillator::kTableSize * Oscillator::kBandCount];
+    Oscillator::m_psHQSquarewaveTable = new short[Oscillator::kTableSize * Oscillator::kBandCount];
 
-    std::vector<float> sineScratch(Oscillator::kTableSize);
-    for (uint index = 0; index < Oscillator::kTableSize; ++index) {
-        sineScratch[index] = std::sin(2.0f * 3.14159265358979f * static_cast<float>(index)
-                                      / static_cast<float>(Oscillator::kTableSize));
-    }
+    squarewave(Oscillator::m_psSquarewaveTable, Oscillator::kTableSize, kTableFrequency, 0.2f);
+    sinewave(Oscillator::m_psSinewaveTable, Oscillator::kTableSize, kTableFrequency, 0.3f);
+    sawtooth(Oscillator::m_psSawtoothTable, Oscillator::kTableSize, kTableFrequency, 0.3f);
+    trianglewave(Oscillator::m_psTrianglewaveTable, Oscillator::kTableSize, kTableFrequency, 0.4f);
+    ASwhitenoise(Oscillator::m_pasWhitenoiseTable, Oscillator::kNoiseTableSize, 0.4f);
 
-    std::vector<float> accumulator(Oscillator::kTableSize);
-
-    for (uint band = 0; band < Oscillator::kBandCount; ++band) {
-        const int limit = Oscillator::kBandHarmonics[band];
-        std::fill(accumulator.begin(), accumulator.end(), 0.0f);
-
-        for (int harmonic = 1; harmonic < limit; harmonic += harmonicStep) {
-            const float amplitude = 1.0f / static_cast<float>(harmonic);
-            uint position = 0;
-            for (uint index = 0; index < Oscillator::kTableSize; ++index) {
-                accumulator[index] += amplitude * sineScratch[position % Oscillator::kTableSize];
-                position += static_cast<uint>(harmonic);
-            }
-        }
-
-        float peak = 0.0f;
-        for (const float value : accumulator) {
-            peak = std::max(peak, value);
-        }
-        if (peak <= 0.0f) {
-            peak = 1.0f;
-        }
-
-        for (uint index = 0; index < Oscillator::kTableSize; ++index) {
-            const float normalised = -accumulator[index] / peak;
-            table[index * Oscillator::kBandCount + band] =
-                static_cast<short>(normalised * level * kFullScale);
-        }
-    }
+    // The sawtooth keeps every harmonic, the square the odd ones.
+    BuildBandLimited(Oscillator::m_psHQSawtoothTable, 1, 0.3f);
+    BuildBandLimited(Oscillator::m_psHQSquarewaveTable, 2, 0.2f);
 }
 
-} // namespace
-
-const int Oscillator::kBandHarmonics[Oscillator::kBandCount] = {512, 337, 169, 84, 42, 21, 10, 6};
-
-void Oscillator::buildTables() {
-    std::call_once(gTablesBuilt, [] {
-        gSine.resize(kTableSize);
-        gTriangle.resize(kTableSize);
-        gSawtooth.resize(kTableSize);
-        gSquare.resize(kTableSize);
-        gNoise.resize(kNoiseTableSize);
-        gHQSawtooth.resize(kTableSize * kBandCount);
-        gHQSquare.resize(kTableSize * kBandCount);
-
-        sinewave(gSine.data(), kTableSize, kTableFrequency, kSineLevel);
-        trianglewave(gTriangle.data(), kTableSize, kTableFrequency, kTriangleLevel);
-        sawtooth(gSawtooth.data(), kTableSize, kSawtoothLevel);
-        squarewave(gSquare.data(), kTableSize, kTableFrequency, kSquareLevel);
-        whitenoise(gNoise.data(), kNoiseTableSize, kNoiseLevel);
-
-        // Sawtooth keeps every harmonic; the square keeps the odd ones.
-        buildBandLimited(gHQSawtooth, 1, kSawtoothLevel);
-        buildBandLimited(gHQSquare, 2, kSquareLevel);
-    });
-}
-
-const short *Oscillator::table(Type type) {
-    buildTables();
-    switch (type) {
-    case Type::Sine:
-        return gSine.data();
-    case Type::Triangle:
-        return gTriangle.data();
-    case Type::Sawtooth:
-    case Type::SawtoothHQ:
-        return gSawtooth.data();
-    case Type::Square:
-    case Type::SquareHQ:
-        return gSquare.data();
-    default:
-        return nullptr;
-    }
-}
-
-const int *Oscillator::noiseTable() {
-    buildTables();
-    return gNoise.data();
-}
-
-const short *Oscillator::bandLimitedTable(Type type) {
-    buildTables();
-    switch (type) {
-    case Type::SawtoothHQ:
-        return gHQSawtooth.data();
-    case Type::SquareHQ:
-        return gHQSquare.data();
-    default:
-        return nullptr;
-    }
-}
-
-// WaveTables::FrequencyToWaveTable. The bands start at roughly C1 and double
-// with every octave; the fraction is how far the frequency has climbed from
-// its band's start towards the next start, clamped to 0..1.
-int Oscillator::frequencyToWaveTable(float hertz, float *fraction) {
-    int band;
-    float position;
-    if (hertz >= 2093.0f) {
-        band = 6;
-        position = (hertz - 2093.0f) / 2093.0f;
-    } else if (hertz >= 1046.0f) {
-        band = 5;
-        position = (hertz - 1046.0f) / 1046.0f;
-    } else if (hertz >= 523.0f) {
-        band = 4;
-        position = (hertz - 523.0f) / 523.0f;
-    } else if (hertz >= 261.0f) {
-        band = 3;
-        position = (hertz - 261.0f) / 261.0f;
-    } else if (hertz >= 130.0f) {
-        band = 2;
-        position = (hertz - 130.0f) / 130.0f;
-    } else if (hertz >= 65.0f) {
-        band = 1;
-        position = (hertz - 65.0f) / 65.0f;
-    } else {
-        band = 0;
-        position = (hertz - 33.0f) / 33.0f;
-    }
-    if (position < 0.0f) {
-        position = 0.0f;
-    } else if (position > 1.0f) {
-        position = 1.0f;
-    }
-    *fraction = position;
-    return band;
+void DestroyWavetables() {
+    delete[] Oscillator::m_psSquarewaveTable;
+    delete[] Oscillator::m_psSinewaveTable;
+    delete[] Oscillator::m_psSawtoothTable;
+    delete[] Oscillator::m_psTrianglewaveTable;
+    delete[] Oscillator::m_pasWhitenoiseTable;
+    delete[] Oscillator::m_psHQSawtoothTable;
+    delete[] Oscillator::m_psHQSquarewaveTable;
+    Oscillator::m_psSquarewaveTable = nullptr;
+    Oscillator::m_psSinewaveTable = nullptr;
+    Oscillator::m_psSawtoothTable = nullptr;
+    Oscillator::m_psTrianglewaveTable = nullptr;
+    Oscillator::m_pasWhitenoiseTable = nullptr;
+    Oscillator::m_psHQSawtoothTable = nullptr;
+    Oscillator::m_psHQSquarewaveTable = nullptr;
 }
 
 Oscillator::Oscillator() {
-    setType(Type::Sine);
+    if (m_nWaveTableRefCount == 0) {
+        GenerateWavetables();
+    }
+    m_nWaveTableRefCount++;
+    SetOscillatorType(kSine);
 }
 
-void Oscillator::setType(Type type) {
-    type_ = type;
-    if (type == Type::Custom1) {
-        table_ = customTables_[0];
-    } else if (type == Type::Custom2) {
-        table_ = customTables_[1];
-    } else {
-        table_ = table(type);
+Oscillator::~Oscillator() {
+    if (--m_nWaveTableRefCount == 0) {
+        DestroyWavetables();
     }
-    bandTable_ = bandLimitedTable(type);
+}
+
+// The type is stored whatever it is; only 0..8 (compared unsigned) choose a
+// table. Noise keeps the table it had.
+void Oscillator::SetOscillatorType(OscillatorType nType) {
+    m_nType = nType;
+    switch (static_cast<unsigned int>(nType)) {
+    case kSine:
+        m_bHQ = false;
+        m_psTable = m_psSinewaveTable;
+        break;
+    case kTriangle:
+        m_bHQ = false;
+        m_psTable = m_psTrianglewaveTable;
+        break;
+    case kSawtooth:
+        m_bHQ = false;
+        m_psTable = m_psSawtoothTable;
+        break;
+    case kSawtoothHQ:
+        m_bHQ = true;
+        m_psTable = m_psHQSawtoothTable;
+        break;
+    case kSquare:
+        m_bHQ = false;
+        m_psTable = m_psSquarewaveTable;
+        break;
+    case kSquareHQ:
+        m_bHQ = true;
+        m_psTable = m_psHQSquarewaveTable;
+        break;
+    case kNoise:
+        m_bHQ = false;
+        break;
+    case kCustom1:
+        m_bHQ = false;
+        m_psTable = m_psCustomTable1;
+        break;
+    case kCustom2:
+        m_bHQ = false;
+        m_psTable = m_psCustomTable2;
+        break;
+    default:
+        break;
+    }
+}
+
+void Oscillator::GenerateSignal(ControlVoltage *pCV, int nIndex, int *pOutput,
+                                unsigned int nSamples, int *pFMInput, int nFMAmount, float fBend) {
+    if (m_bHQ) {
+        GenerateSignalHQ(pCV, nIndex, pOutput, nSamples, pFMInput, nFMAmount, fBend);
+    } else {
+        GenerateSignalLQ(pCV, nIndex, pOutput, nSamples, pFMInput, nFMAmount, fBend);
+    }
 }
 
 namespace {
 
-// The engine's 16-bit clamp: at or above 0x8000 gives 0x7FFF, below
-// -0x7FFF gives -0x7FFF.
-int clamp16(int value) {
-    if (value >= 0x8000) {
-        return 0x7FFF;
+// Glide is resolved once per block, before anything else: linear in Q12
+// hertz from the start to the target over m_nGlideSamples, measured from
+// note-on. Reaching the end clears the glide.
+inline float ResolvePitch(ControlVoltage *pCV) {
+    if (pCV->m_nGlideSamples == 0) {
+        return pCV->m_fTargetPitch;
     }
-    if (value < -0x7FFF) {
-        return -0x7FFF;
+    float fProgress = static_cast<float>(pCV->m_nSamplesSinceNoteOn)
+                      / static_cast<float>(pCV->m_nGlideSamples);
+    if (fProgress >= 1.0f) {
+        fProgress = 1.0f;
+        pCV->m_nGlideSamples = 0;
     }
-    return value;
+    pCV->m_fCurrentPitch = pCV->m_fGlideStart + fProgress * (pCV->m_fTargetPitch - pCV->m_fGlideStart);
+    return pCV->m_fCurrentPitch;
+}
+
+// The per-sample parts every mode loop shares.
+struct SampleContext {
+    const Oscillator *pOsc;
+    int *pFMInput;
+    int nFMAmount;
+    bool bSteps;
+    float fStepRatio;
+
+    // Octave and semitone inputs, floored to whole steps. Recomputed only
+    // when either source is not the default (its waveform is not kOff).
+    void UpdateSteps(unsigned int n) {
+        if (bSteps) {
+            const float fOctaves = std::floor(
+                static_cast<float>(pOsc->m_pOctave->m_pnOutput[n]) * kInverseQ24 * 4.0f);
+            const float fSemitones = std::floor(
+                static_cast<float>(pOsc->m_pSemitones->m_pnOutput[n]) * kInverseQ24 * 12.0f);
+            fStepRatio = std::pow(2.0f, (fSemitones + fOctaves * 12.0f) / 12.0f);
+        }
+    }
+
+    float Vibrato(unsigned int n) const {
+        return 1.0f + static_cast<float>(pOsc->m_pVibrato->m_pnOutput[n]) * kInverseQ24 * 0.1f;
+    }
+
+    // The modulator product, input * (amount * (1 + depth)), both Q24.
+    int Drive(unsigned int n) const {
+        return Mul24(pFMInput[n], Mul24(pOsc->m_pFMDepth->m_pnOutput[n] + 0xFFFFFF, nFMAmount));
+    }
+
+    unsigned int TableIndex(std::uint32_t nPhase, unsigned int n) const {
+        return (nPhase >> 12)
+               + static_cast<unsigned int>(pOsc->m_nPhaseOffset + (pOsc->m_pPhase->m_pnOutput[n] >> 12));
+    }
+};
+
+inline int ReadLQ(const short *psTable, unsigned int nIndex, int nFraction) {
+    const int nCurrent = psTable[nIndex & 0xFFF];
+    const int nFollowing = psTable[(nIndex + 1) & 0xFFF];
+    return ToOutput(nCurrent + ((Clamp16(nFollowing - nCurrent) * nFraction) >> 15));
+}
+
+// Band b and band b + 1 at the same phase, each clamped, blended by the
+// band weight.
+inline int ReadHQ(const short *psTable, unsigned int nIndex, int nFraction, unsigned int nBand,
+                  int nWeight) {
+    const unsigned int nPosition = nIndex & 0xFFF;
+    const unsigned int nNext = (nIndex + 1) & 0xFFF;
+    const auto Interpolate = [&](unsigned int b) {
+        const int nCurrent = psTable[nPosition * Oscillator::kBandCount + b];
+        const int nFollowing = psTable[nNext * Oscillator::kBandCount + b];
+        return Clamp16(nCurrent + ((Clamp16(nFollowing - nCurrent) * nFraction) >> 15));
+    };
+    const int nLower = Interpolate(nBand);
+    const int nUpper = Interpolate(nBand + 1);
+    return ToOutput(nLower + ((nWeight * Clamp16(nUpper - nLower)) >> 15));
+}
+
+// The three mode loops, as the engine writes them out per mode. Read is the
+// table read, LQ or HQ.
+template <typename Read>
+void RunModes(Oscillator *pOsc, ControlVoltage *pCV, int nIndex, int *pOutput,
+              unsigned int nSamples, SampleContext &ctx, float fBase, Read read) {
+    std::uint32_t &nPhase = pCV->m_anPhase[nIndex];
+    float &fSweep = pCV->m_afPitchSweep[nIndex];
+    const auto Advance = [&](float fFM, unsigned int n) {
+        // Recomputed in float every sample and truncated.
+        const float fIncrement = (1.0f + fSweep) * fBase * ctx.Vibrato(n) * fFM * ctx.fStepRatio;
+        nPhase += static_cast<std::uint32_t>(static_cast<std::int32_t>(fIncrement));
+        fSweep *= pCV->m_fPitchSweepDecay;
+    };
+    const auto Fraction = [&]() { return static_cast<int>((nPhase & 0xFFFu) << 3); };
+
+    switch (pOsc->m_nModulationMode) {
+    case Oscillator::kFrequencyModulation:
+        for (unsigned int n = 0; n < nSamples; n++) {
+            ctx.UpdateSteps(n);
+            const int nDrive = ctx.Drive(n);
+            pOutput[n] = read(ctx.TableIndex(nPhase, n), Fraction());
+            Advance(1.0f + static_cast<float>(nDrive) * kInverseQ24, n);
+        }
+        break;
+    case Oscillator::kPhaseModulation:
+        // The product moves the table index only; the fraction still comes
+        // from the unmodulated phase.
+        for (unsigned int n = 0; n < nSamples; n++) {
+            ctx.UpdateSteps(n);
+            const int nDrive = ctx.Drive(n);
+            pOutput[n] = read(ctx.TableIndex(nPhase + static_cast<std::uint32_t>(nDrive), n), Fraction());
+            Advance(1.0f, n);
+        }
+        break;
+    case Oscillator::kAmplitudeModulation:
+        for (unsigned int n = 0; n < nSamples; n++) {
+            ctx.UpdateSteps(n);
+            const int nDrive = ctx.Drive(n);
+            pOutput[n] = Mul24(read(ctx.TableIndex(nPhase, n), Fraction()), nDrive + 0xFFFFFF);
+            Advance(1.0f, n);
+        }
+        break;
+    default:
+        break;
+    }
+    nPhase &= 0xFFFFFF;
 }
 
 } // namespace
 
-int Oscillator::readTable(uint index, int fraction) const {
-    const uint position = index & (kTableSize - 1);
-    const uint next = (index + 1) & (kTableSize - 1);
+void Oscillator::GenerateSignalLQ(ControlVoltage *pCV, int nIndex, int *pOutput,
+                                  unsigned int nSamples, int *pFMInput, int nFMAmount, float fBend) {
+    const float fPitch = ResolvePitch(pCV);
 
-    int value;
-    if (bandTable_ != nullptr) {
-        // GenerateSignalHQ interpolates band b and band b + 1 at the same
-        // phase, each clamped, then blends them by the band weight.
-        const auto interpolate = [&](uint band) {
-            const int current = bandTable_[position * kBandCount + band];
-            const int following = bandTable_[next * kBandCount + band];
-            return clamp16(current + ((clamp16(following - current) * fraction) >> 15));
-        };
-        const int lower = interpolate(band_);
-        const int upper = interpolate(band_ + 1);
-        value = lower + ((bandWeight_ * clamp16(upper - lower)) >> 15);
-    } else {
-        // The difference is clamped before it is scaled, as the engine does
-        // with cmp #0x8000 / movwge #0x7fff. fraction is the low 12 phase
-        // bits widened to Q15.
-        const int current = table_[position];
-        const int following = table_[next];
-        value = current + ((clamp16(following - current) * fraction) >> 15);
-    }
-
-    // Q15 to Q24 with the engine's clamp.
-    if (value >= 0x8000) {
-        return kOutputFullScale;
-    }
-    if (value < -0x7FFF) {
-        return -kOutputFullScale;
-    }
-    return value << 9;
-}
-
-void Oscillator::generateNoise(int *output, uint numSamples) {
-    // The engine copies consecutive noise values straight to the output and
-    // wraps the position by (position + n) mod (22050 - n), so the next block's
-    // copy of n values always fits. Pitch and modulation do not apply.
-    const int *noise = noiseTable();
-    for (uint index = 0; index < numSamples; ++index) {
-        output[index] = noise[(noisePosition_ + index) % kNoiseTableSize];
-    }
-    if (numSamples < kNoiseTableSize) {
-        noisePosition_ = (noisePosition_ + numSamples) % (kNoiseTableSize - numSamples);
-    }
-}
-
-void Oscillator::generate(ControlVoltage &voltage, int oscillatorIndex, int *output,
-                          uint numSamples, const Modulation &modulation, float bend) {
-    // Glide is resolved once per block, before anything else: linear in
-    // Q12 hertz from the start to the target over glideSamples, measured from
-    // note-on. Reaching the end clears the glide.
-    float pitch = voltage.m_fTargetPitch;
-    if (voltage.m_nGlideSamples != 0) {
-        float progress = static_cast<float>(voltage.m_nSamplesSinceNoteOn)
-                         / static_cast<float>(voltage.m_nGlideSamples);
-        if (progress >= 1.0f) {
-            progress = 1.0f;
-            voltage.m_nGlideSamples = 0;
+    // Noise ignores pitch and modulation: consecutive values straight from
+    // the table, the position wrapped by (position + n) mod (22050 - n) so the
+    // next block's copy always fits.
+    if (m_nType == kNoise) {
+        if (m_nNoisePosition + nSamples <= kNoiseTableSize) {
+            std::memcpy(pOutput, m_pasWhitenoiseTable + m_nNoisePosition, nSamples * sizeof(int));
+        } else {
+            // A block longer than the one before it can run past the table;
+            // the engine's memcpy would read beyond it. Wrap instead.
+            for (unsigned int n = 0; n < nSamples; n++) {
+                pOutput[n] = m_pasWhitenoiseTable[(m_nNoisePosition + n) % kNoiseTableSize];
+            }
         }
-        voltage.m_fCurrentPitch =
-            voltage.m_fGlideStart + progress * (voltage.m_fTargetPitch - voltage.m_fGlideStart);
-        pitch = voltage.m_fCurrentPitch;
-    }
-
-    if (type_ == Type::Noise) {
-        generateNoise(output, numSamples);
-        return;
-    }
-
-    const float base = pitch * bend * pitchRatio_ * kPitchToIncrement;
-    // GenerateSignalHQ turns the increment back into hertz for the band
-    // picker: base / (4096 / 44100) * (1 / 4096), in that order.
-    if (bandTable_ != nullptr) {
-        float weight = 0.0f;
-        band_ = static_cast<uint>(
-            frequencyToWaveTable(base / kPitchToIncrement * (1.0f / 4096.0f), &weight));
-        bandWeight_ = static_cast<std::int16_t>(static_cast<int>(weight * 16383.0f));
-    }
-
-    std::uint32_t &phase = voltage.m_anPhase[oscillatorIndex];
-    float &sweep = voltage.m_afPitchSweep[oscillatorIndex];
-
-    if (table_ == nullptr && bandTable_ == nullptr) {
-        for (uint index = 0; index < numSamples; ++index) {
-            output[index] = 0;
+        if (nSamples < kNoiseTableSize) {
+            m_nNoisePosition = (nSamples + m_nNoisePosition) % (kNoiseTableSize - nSamples);
         }
         return;
     }
 
-    // Any mode value other than 0, 1 and 2 makes the engine store the phase
-    // back unchanged and return, leaving the output buffer as it was.
-    const bool frequencyMode = modulationMode_ == ModulationMode::Frequency;
-    const bool phaseMode = modulationMode_ == ModulationMode::Phase;
-    const bool amplitudeMode = modulationMode_ == ModulationMode::Amplitude;
-    if (!frequencyMode && !phaseMode && !amplitudeMode) {
-        phase &= kPhaseMask;
-        return;
-    }
-
-    // Octave and semitone offsets are floored to whole steps. The engine
-    // recomputes them only when either source is connected, which a null
-    // pointer here stands for.
-    float stepRatio = 1.0f;
-
-    for (uint index = 0; index < numSamples; ++index) {
-        if (modulation.octave != nullptr || modulation.semitones != nullptr) {
-            const float octaves =
-                modulation.octave != nullptr
-                    ? std::floor(static_cast<float>(modulation.octave[index])
-                                 * StateScale::kInverseOne24 * kOctaveRange)
-                    : 0.0f;
-            const float semitones =
-                modulation.semitones != nullptr
-                    ? std::floor(static_cast<float>(modulation.semitones[index])
-                                 * StateScale::kInverseOne24 * kSemitoneRange)
-                    : 0.0f;
-            stepRatio = std::pow(2.0f, (semitones + octaves * 12.0f) / 12.0f);
-        }
-
-        const float vibrato =
-            1.0f + (modulation.vibrato != nullptr
-                        ? static_cast<float>(modulation.vibrato[index]) * StateScale::kInverseOne24
-                              * kVibratoDepth
-                        : 0.0f);
-
-        // The modulator product is the same in all three modes:
-        // input * (amount * (1 + depth)), both multiplies Q24. Only where it is
-        // applied differs.
-        int drive = 0;
-        if (modulation.fmInput != nullptr) {
-            const int depthLift =
-                modulation.fmDepth != nullptr ? modulation.fmDepth[index] : 0;
-            const auto depth = static_cast<int>(
-                (static_cast<std::int64_t>(depthLift + 0xFFFFFF) * modulation.fmAmount) >> 24);
-            drive = static_cast<int>(
-                (static_cast<std::int64_t>(modulation.fmInput[index]) * depth) >> 24);
-        }
-
-        // Mode 1 adds the product to the phase used for the table index only;
-        // the interpolation fraction still comes from the unmodulated phase.
-        const std::uint32_t indexPhase =
-            phaseMode ? phase + static_cast<std::uint32_t>(drive) : phase;
-
-        const int phaseShift =
-            modulation.phase != nullptr ? (modulation.phase[index] >> kFractionBits) : 0;
-        const uint tableIndex =
-            (indexPhase >> kFractionBits) + static_cast<uint>(phaseOffset_ + phaseShift);
-        const auto fraction = static_cast<int>((phase & ((1u << kFractionBits) - 1)) << 3);
-
-        int sample = readTable(tableIndex, fraction);
-
-        // Mode 2 scales the finished sample by (1 + product) in Q24, through a
-        // 64-bit multiply.
-        if (amplitudeMode) {
-            sample = static_cast<int>((static_cast<std::int64_t>(sample) * (drive + 0xFFFFFF)) >> 24);
-        }
-        output[index] = sample;
-
-        // The increment is recomputed in float every sample and truncated.
-        // Only mode 0 folds the product into it.
-        const float fm =
-            frequencyMode ? 1.0f + static_cast<float>(drive) * StateScale::kInverseOne24 : 1.0f;
-        const float increment = (1.0f + sweep) * base * vibrato * fm * stepRatio;
-        phase += static_cast<std::uint32_t>(static_cast<std::int32_t>(increment));
-
-        sweep *= voltage.m_fPitchSweepDecay;
-    }
-
-    phase &= kPhaseMask;
+    const float fBase = fPitch * fBend * m_fPitchRatio * kPitchToIncrement;
+    SampleContext ctx{this, pFMInput, nFMAmount,
+                      m_pOctave->m_nWaveform != LFO::kOff || m_pSemitones->m_nWaveform != LFO::kOff,
+                      1.0f};
+    const short *psTable = m_psTable;
+    RunModes(this, pCV, nIndex, pOutput, nSamples, ctx, fBase,
+             [psTable](unsigned int nTableIndex, int nFraction) {
+                 return ReadLQ(psTable, nTableIndex, nFraction);
+             });
 }
 
-void Oscillator::setFrequency(float hertz) {
-    const float scaled = hertz * ControlVoltage::kPitchScale;
-    standalone_.m_fTargetPitch = scaled;
-    standalone_.m_fCurrentPitch = scaled;
-    standalone_.m_fGlideStart = scaled;
-    standalone_.m_nGlideSamples = 0;
-}
+void Oscillator::GenerateSignalHQ(ControlVoltage *pCV, int nIndex, int *pOutput,
+                                  unsigned int nSamples, int *pFMInput, int nFMAmount, float fBend) {
+    const float fPitch = ResolvePitch(pCV);
+    const float fBase = fPitch * fBend * m_fPitchRatio * kPitchToIncrement;
 
-void Oscillator::resetPhase() {
-    standalone_.m_anPhase[0] = 0;
-    noisePosition_ = 0;
-}
+    // The band pair for this block, from the increment turned back into
+    // hertz: base / (4096 / 44100) * (1 / 4096), in that order.
+    float fFraction = 0.0f;
+    const auto nBand = static_cast<unsigned int>(
+        WaveTables::FrequencyToWaveTable(fBase / kPitchToIncrement * (1.0f / 4096.0f), &fFraction));
+    const int nWeight = static_cast<std::int16_t>(static_cast<int>(fFraction * 16383.0f));
 
-void Oscillator::generate(int *output, uint numSamples) {
-    generate(standalone_, 0, output, numSamples, Modulation{}, 1.0f);
+    SampleContext ctx{this, pFMInput, nFMAmount,
+                      m_pOctave->m_nWaveform != LFO::kOff || m_pSemitones->m_nWaveform != LFO::kOff,
+                      1.0f};
+    const short *psTable = m_psTable;
+    RunModes(this, pCV, nIndex, pOutput, nSamples, ctx, fBase,
+             [psTable, nBand, nWeight](unsigned int nTableIndex, int nFraction) {
+                 return ReadHQ(psTable, nTableIndex, nFraction, nBand, nWeight);
+             });
 }

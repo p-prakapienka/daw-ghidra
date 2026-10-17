@@ -87,11 +87,13 @@ TEST(SubSynthControls, Oscillator2WaveformZeroIsOff) {
 
     shared.setOscillator2Waveform(3);
     EXPECT_TRUE(shared.oscillator2Enabled);
-    EXPECT_EQ(shared.oscillator2.type(), Oscillator::Type::Sawtooth);
+    EXPECT_EQ(shared.oscillator2.m_nType, Oscillator::kSawtooth);
 
     shared.setOscillator2Waveform(0);
     EXPECT_FALSE(shared.oscillator2Enabled);
-    EXPECT_EQ(shared.oscillator2.type(), Oscillator::Type::Sawtooth);
+    // SetOscillatorType(-1): only the stored type changes.
+    EXPECT_EQ(static_cast<int>(shared.oscillator2.m_nType), -1);
+    EXPECT_EQ(shared.oscillator2.m_psTable, Oscillator::m_psSawtoothTable);
 }
 
 TEST(SubSynthRouting, DefaultsToNoModulation) {
@@ -100,8 +102,8 @@ TEST(SubSynthRouting, DefaultsToNoModulation) {
     const SubSynthRouting routing =
         SubSynthRouting::connect(lfo1, LFO::Target::None, lfo2, LFO::Target::None);
 
-    EXPECT_EQ(routing.oscillator1.vibrato, nullptr);
-    EXPECT_EQ(routing.oscillator2.phase, nullptr);
+    EXPECT_EQ(routing.oscillator1Vibrato, nullptr);
+    EXPECT_EQ(routing.oscillator2Phase, nullptr);
     EXPECT_EQ(routing.cutoff, nullptr);
     EXPECT_EQ(routing.volume, nullptr);
 }
@@ -119,15 +121,15 @@ TEST(SubSynthRouting, EachTargetReachesItsInput) {
     LFO lfo2;
     SubSynthRouting routing =
         SubSynthRouting::connect(lfo1, LFO::Target::BothPitch, lfo2, LFO::Target::Volume);
-    EXPECT_EQ(routing.oscillator1.vibrato, lfo1.m_pnOutput);
-    EXPECT_EQ(routing.oscillator2.vibrato, lfo1.m_pnOutput);
-    EXPECT_EQ(routing.volume, lfo2.m_pnOutput);
+    EXPECT_EQ(routing.oscillator1Vibrato, &lfo1);
+    EXPECT_EQ(routing.oscillator2Vibrato, &lfo1);
+    EXPECT_EQ(routing.volume, &lfo2);
 
     routing = SubSynthRouting::connect(lfo1, LFO::Target::Oscillator2Semitones, lfo2,
                                        LFO::Target::Oscillator1Modulation);
-    EXPECT_EQ(routing.oscillator2.semitones, lfo1.m_pnOutput);
-    EXPECT_EQ(routing.oscillator1.fmDepth, lfo2.m_pnOutput);
-    EXPECT_EQ(routing.oscillator1.semitones, nullptr);
+    EXPECT_EQ(routing.oscillator2Semitones, &lfo1);
+    EXPECT_EQ(routing.oscillator1FMDepth, &lfo2);
+    EXPECT_EQ(routing.oscillator2Octave, nullptr);
 }
 
 TEST(SubSynthRouting, OctaveTargetStartsTheLFOHalfACycleIn) {
@@ -224,7 +226,7 @@ TEST(SubSynthVoice, Oscillator2IsSilentAndInertWhileDisabled) {
 TEST(SubSynthVoice, FullMixPlaysOscillator2) {
     SubSynthVoice::Shared shared;
     shared.setOscillator2Waveform(1); // sine
-    shared.oscillator2.setPitchRatio(2.0f);
+    shared.oscillator2.m_fPitchRatio = 2.0f;
     shared.setMix(1.0f);
 
     SubSynthVoice voice;
@@ -257,11 +259,13 @@ TEST(SubSynthVoice, ModulationAmountBendsOscillator1WithOscillator2) {
 }
 
 TEST(SubSynthVoice, VolumeModulationScalesTheOutput) {
-    std::vector<int> halfDown(kBlock, -(1 << 23));
+    // An LFO whose output block holds -0.5 throughout.
+    LFO halfDown;
+    std::fill(halfDown.m_pnOutput, halfDown.m_pnOutput + LFO::kBlockSize, -(1 << 23));
 
     SubSynthVoice::Shared plainShared;
     SubSynthVoice::Shared quietShared;
-    quietShared.routing.volume = halfDown.data();
+    quietShared.routing.volume = &halfDown;
 
     SubSynthVoice plain;
     SubSynthVoice quiet;

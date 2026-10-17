@@ -111,38 +111,40 @@ TEST(SubSynthControlTable, OscillatorTwoPitchReadsAllThreeKnobs) {
     float ratio = std::pow(2.0f, 1.0f * 12.0f / 12.0f);
     ratio *= std::pow(2.0f, 7.0f / 12.0f);
     ratio *= cents(10.0f);
-    EXPECT_EQ(rig.synth->shared.oscillator2.pitchRatio(), ratio);
-    EXPECT_EQ(rig.synth->shared.oscillator1.pitchRatio(), 1.0f);
+    EXPECT_EQ(rig.synth->shared.oscillator2.m_fPitchRatio, ratio);
+    EXPECT_EQ(rig.synth->shared.oscillator1.m_fPitchRatio, 1.0f);
 }
 
 TEST(SubSynthControlTable, CentsModeDetunesOscillatorOneDown) {
     Rig rig;
     rig.controls.set(8, 20.0f);
     rig.controls.setCentsMode(1);
-    EXPECT_EQ(rig.synth->shared.oscillator1.pitchRatio(), cents(-20.0f));
+    EXPECT_EQ(rig.synth->shared.oscillator1.m_fPitchRatio, cents(-20.0f));
 
     // The cents knob refreshes oscillator 1 in mode 1; the octave does not.
     rig.controls.set(8, 30.0f);
-    EXPECT_EQ(rig.synth->shared.oscillator1.pitchRatio(), cents(-30.0f));
-    rig.synth->shared.oscillator1.setPitchRatio(1.5f);
+    EXPECT_EQ(rig.synth->shared.oscillator1.m_fPitchRatio, cents(-30.0f));
+    rig.synth->shared.oscillator1.m_fPitchRatio = 1.5f;
     rig.controls.set(6, 1.0f);
-    EXPECT_EQ(rig.synth->shared.oscillator1.pitchRatio(), 1.5f);
+    EXPECT_EQ(rig.synth->shared.oscillator1.m_fPitchRatio, 1.5f);
 
     rig.controls.setCentsMode(0);
-    EXPECT_EQ(rig.synth->shared.oscillator1.pitchRatio(), 1.0f);
+    EXPECT_EQ(rig.synth->shared.oscillator1.m_fPitchRatio, 1.0f);
 }
 
 TEST(SubSynthControlTable, WaveformValuesSelectTypes) {
     Rig rig;
     rig.controls.set(1, 6.0f);
-    EXPECT_EQ(rig.synth->shared.oscillator1.type(), Oscillator::Type::Noise);
-    // Outside 0..8 the engine keeps the playing table.
+    EXPECT_EQ(rig.synth->shared.oscillator1.m_nType, Oscillator::kNoise);
+    // Noise keeps the table it had; outside 0..8 only the stored type
+    // changes, so the sine table set at construction is still in place.
     rig.controls.set(1, 12.0f);
-    EXPECT_EQ(rig.synth->shared.oscillator1.type(), Oscillator::Type::Noise);
+    EXPECT_EQ(static_cast<int>(rig.synth->shared.oscillator1.m_nType), 12);
+    EXPECT_EQ(rig.synth->shared.oscillator1.m_psTable, Oscillator::m_psSinewaveTable);
 
     rig.controls.set(4, 3.0f);
     EXPECT_TRUE(rig.synth->shared.oscillator2Enabled);
-    EXPECT_EQ(rig.synth->shared.oscillator2.type(), Oscillator::Type::Sawtooth);
+    EXPECT_EQ(rig.synth->shared.oscillator2.m_nType, Oscillator::kSawtooth);
     rig.controls.set(4, 0.0f);
     EXPECT_FALSE(rig.synth->shared.oscillator2Enabled);
 }
@@ -196,7 +198,7 @@ TEST(SubSynthControlTable, OutputVolumeIsSquared) {
 TEST(SubSynthControlTable, PhaseAndAmountsScale) {
     Rig rig;
     rig.controls.set(5, -0.25f);
-    EXPECT_EQ(rig.synth->shared.oscillator2.phaseOffset(), -1024);
+    EXPECT_EQ(rig.synth->shared.oscillator2.m_nPhaseOffset, -1024);
     rig.controls.set(31, 0.5f);
     EXPECT_EQ(rig.synth->shared.modulationAmountQ24, static_cast<std::int32_t>(0.5f * 16777215.0f));
     rig.controls.set(2, 0.25f);
@@ -227,7 +229,7 @@ TEST(SubSynthControlEvents, MidiTargetsHandledInPlace) {
     EXPECT_EQ(rig.controls.modulationMode(), 1);
     rig.controls.applyMidiTarget(SubSynthControls::kModulationModeTarget, 0.9f);
     EXPECT_EQ(rig.controls.modulationMode(), 2);
-    EXPECT_EQ(rig.synth->shared.oscillator1.modulationMode(), Oscillator::ModulationMode::Amplitude);
+    EXPECT_EQ(rig.synth->shared.oscillator1.m_nModulationMode, Oscillator::kAmplitudeModulation);
 
     rig.controls.applyMidiTarget(SubSynthControls::kCentsModeTarget, 0.6f);
     EXPECT_EQ(rig.controls.centsMode(), 1);
@@ -253,8 +255,8 @@ TEST(SubSynthControlLoad, AppliesControlsThenModes) {
     rig.controls.load(archive);
 
     // The cents mode runs after the collection, so it sees the loaded cents.
-    EXPECT_EQ(rig.synth->shared.oscillator1.pitchRatio(), cents(-30.0f));
-    EXPECT_EQ(rig.synth->shared.oscillator1.modulationMode(), Oscillator::ModulationMode::Phase);
+    EXPECT_EQ(rig.synth->shared.oscillator1.m_fPitchRatio, cents(-30.0f));
+    EXPECT_EQ(rig.synth->shared.oscillator1.m_nModulationMode, Oscillator::kPhaseModulation);
     EXPECT_EQ(rig.synth->polyphony(), 2);
     // Current version: no fix-up, the position is squared.
     EXPECT_EQ(rig.synth->voices[0].amplitudeEnvelope.m_fAttack, 1.2f * 1.2f);
@@ -285,9 +287,9 @@ TEST(SubSynthControlLoad, OldWaveformsAreRenumbered) {
     archive.controls = {{1, 4.0f}, {4, 5.0f}};
     rig.controls.load(archive);
     EXPECT_EQ(rig.controls.position(1), 6.0f);
-    EXPECT_EQ(rig.synth->shared.oscillator1.type(), Oscillator::Type::Noise);
+    EXPECT_EQ(rig.synth->shared.oscillator1.m_nType, Oscillator::kNoise);
     EXPECT_EQ(rig.controls.position(4), 7.0f);
-    EXPECT_EQ(rig.synth->shared.oscillator2.type(), Oscillator::Type::Noise);
+    EXPECT_EQ(rig.synth->shared.oscillator2.m_nType, Oscillator::kNoise);
 }
 
 TEST(SubSynthControlLoad, IdsWithoutAModelledControlAreIgnored) {
@@ -327,7 +329,7 @@ TEST(SubSynthControlLoad, CustomWaveformsFillTheTables) {
 
     // Played as type 7, the oscillator reads the custom table.
     rig.controls.set(1, 7.0f);
-    EXPECT_EQ(rig.synth->shared.oscillator1.type(), Oscillator::Type::Custom1);
+    EXPECT_EQ(rig.synth->shared.oscillator1.m_nType, Oscillator::kCustom1);
 }
 
 TEST(SubSynthControlLoad, BeforeThreeTheSecondWaveformIsHalfCleared) {

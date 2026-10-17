@@ -1,170 +1,113 @@
 #pragma once
 
-// Reconstructed Caustic wavetable oscillator.
+// Oscillator: SubSynth's wavetable oscillator. Standard quality reads one
+// 4096-entry table; HQ crossfades between band-limited copies of a cycle.
 //
-// Recovered from GenerateWavetables, the waveform generators,
-// Oscillator::SetOscillatorType, Oscillator::SetModulationMode and
-// Oscillator::GenerateSignal{LQ,HQ} in libcaustic.so (ARMv7). See
-// src/dsp/Oscillator.md for the evidence.
+// Recovered from Oscillator::Oscillator (0x8f974), ~Oscillator (0x8fabc),
+// SetOscillatorType (0x8dd40), SetModulationMode (0x8de24), GenerateSignal
+// (0x8f024), GenerateSignalLQ (0x8de2c) and GenerateSignalHQ (0x8e60c), and
+// from GenerateWavetables (0x8f54c) and its generators, in libcaustic.so
+// (ARMv7). See dsp/Oscillator.md.
 //
-// The pitch path, glide, phase storage, pitch sweep, the five modulation
-// inputs and all three modulation modes are the engine's. The custom
-// wavetables are not yet implemented.
+// Ported to the original's structure. Oscillator has no virtual functions.
+// The members are public because SubSynth writes them directly: the pitch
+// ratio and phase offset from its controls, and the five modulation sources
+// from ConnectLFOs. Their names are ours, in the engine's Hungarian style;
+// the offsets and types are the engine's. The shared tables are static
+// members with the engine's own names, reference-counted by the constructor
+// and destructor.
 
 #include <cstdint>
 
 #include "dsp/ControlVoltage.h"
-
-using uint = unsigned int;
+#include "dsp/LFO.h"
 
 class Oscillator {
 public:
-    // The value the engine stores at offset 0x20 and switches on. Numbering is
-    // the jump table's, so it matches the preset data.
-    enum class Type : int {
-        Sine = 0,
-        Triangle = 1,
-        Sawtooth = 2,
-        SawtoothHQ = 3,
-        Square = 4,
-        SquareHQ = 5,
-        Noise = 6,
-        Custom1 = 7,
-        Custom2 = 8,
+    // Oscillator::OscillatorType, the value at +0x20. Numbered as the engine
+    // stores it, which is also what presets hold.
+    enum OscillatorType {
+        kSine = 0,
+        kTriangle = 1,
+        kSawtooth = 2,
+        kSawtoothHQ = 3,
+        kSquare = 4,
+        kSquareHQ = 5,
+        kNoise = 6,
+        kCustom1 = 7,
+        kCustom2 = 8,
     };
 
-    // The value stored at offset 0x24 by SetModulationMode, and what the
-    // modulator product (input * amount * (1 + depth)) is applied to. SubSynth
-    // exposes it as "Osc1 Mod Mode". Any other value makes the engine return
-    // without touching the phase or the output.
-    enum class ModulationMode : int {
-        Frequency = 0, // scales the phase increment by 1 + product
-        Phase = 1,     // offsets the table index by the product
-        Amplitude = 2, // scales the output sample by 1 + product
+    // Oscillator::ModulationMode, the value at +0x24: what the modulator
+    // product, input * amount * (1 + depth), drives. Any other value makes
+    // GenerateSignal store the phase back and return.
+    enum ModulationMode {
+        kFrequencyModulation = 0, // scales the phase increment by 1 + product
+        kPhaseModulation = 1,     // offsets the table index by the product
+        kAmplitudeModulation = 2, // scales the output sample by 1 + product
     };
 
-    // Every shared table holds one cycle in this many entries.
-    static constexpr uint kTableSize = 4096;
-
-    // Phase carries 12 fractional bits below the 12-bit table index.
-    static constexpr uint kFractionBits = 12;
-    static constexpr uint kPhaseMask = (kTableSize << kFractionBits) - 1;
-
-    // The rate the engine hardcodes, here and in the ADSR.
-    static constexpr float kSampleRate = 44100.0f;
-
-    // Converts Q12 hertz to a phase increment: 4096 / 44100, a literal in
-    // GenerateSignalLQ's pool.
-    static constexpr float kPitchToIncrement = 4096.0f / 44100.0f;
-
-    // Noise is 22050 Q24 ints, half a second.
-    static constexpr uint kNoiseTableSize = 22050;
-
-    // An HQ table holds this many band-limited variants of one cycle,
-    // interleaved so that all bands of one phase step sit together.
-    static constexpr uint kBandCount = 8;
-
-    // Highest harmonic kept in each band, lowest pitch first.
-    static const int kBandHarmonics[kBandCount];
-
-    // Output is Q24: the interpolated Q15 table value shifted left by nine and
-    // clamped to this.
-    static constexpr int kOutputFullScale = 0xFFFE00;
-
-    // Vibrato input scales the pitch by up to this fraction either way.
-    static constexpr float kVibratoDepth = 0.1f;
-
-    // Octave and semitone inputs span this many units at full scale, and are
-    // floored to whole steps.
-    static constexpr float kOctaveRange = 4.0f;
-    static constexpr float kSemitoneRange = 12.0f;
-
-    // Modulation sources. The engine reaches each through a pointer on the
-    // oscillator whose target holds a per-sample Q24 array at +0x0C. A null
-    // pointer here stands for the engine's default source.
-    struct Modulation {
-        const int *vibrato = nullptr;   // osc +0x00: pitch, +/-10%
-        const int *phase = nullptr;     // osc +0x08: phase offset in table units << 12
-        const int *octave = nullptr;    // osc +0x10: whole octaves, +/-4
-        const int *semitones = nullptr; // osc +0x14: whole semitones, +/-12
-        const int *fmDepth = nullptr;   // osc +0x18: scales the FM amount by 1 + value
-
-        // The modulator: the engine's fifth and sixth arguments. input is
-        // another oscillator's Q24 output, amount is Q24. The modulation mode
-        // decides what the product drives.
-        const int *fmInput = nullptr;
-        int fmAmount = 0;
-    };
+    static constexpr unsigned int kTableSize = 4096;      // entries per cycle
+    static constexpr unsigned int kBandCount = 8;         // bands in an HQ table
+    static constexpr unsigned int kNoiseTableSize = 22050; // Q24 ints, half a second
 
     Oscillator();
+    ~Oscillator();
 
-    void setType(Type type);
+    void SetOscillatorType(OscillatorType nType);
+    void SetModulationMode(ModulationMode nMode) { m_nModulationMode = nMode; }
 
-    // The tables types 7 and 8 play (+0x2C, +0x30). SubSynth points both of
-    // its oscillators at its two custom wavetables. SetOscillatorType copies
-    // the pointer when the type is chosen, so set these first.
-    void setCustomTables(const short *first, const short *second) {
-        customTables_[0] = first;
-        customTables_[1] = second;
-    }
-    Type type() const { return type_; }
+    // Render nSamples for the voice in pCV, with the phase in slot nIndex.
+    // pFMInput is the modulator (another oscillator's output) and nFMAmount
+    // its amount, Q24; fBend is the machine's pitch-bend ratio. Dispatches on
+    // m_bHQ.
+    void GenerateSignal(ControlVoltage *pCV, int nIndex, int *pOutput, unsigned int nSamples,
+                        int *pFMInput, int nFMAmount, float fBend);
+    void GenerateSignalLQ(ControlVoltage *pCV, int nIndex, int *pOutput, unsigned int nSamples,
+                          int *pFMInput, int nFMAmount, float fBend);
+    void GenerateSignalHQ(ControlVoltage *pCV, int nIndex, int *pOutput, unsigned int nSamples,
+                          int *pFMInput, int nFMAmount, float fBend);
 
-    void setModulationMode(ModulationMode mode) { modulationMode_ = mode; }
-    ModulationMode modulationMode() const { return modulationMode_; }
+    LFO *m_pVibrato = nullptr;          // +0x00: pitch, +/-10%
+    float m_fPitchRatio = 1.0f;         // +0x04: frequency multiplier
+    LFO *m_pPhase = nullptr;            // +0x08: phase offset in table units << 12
+    int m_nPhaseOffset = 0;             // +0x0C: fixed phase offset in table entries
+    LFO *m_pOctave = nullptr;           // +0x10: whole octaves, +/-4
+    LFO *m_pSemitones = nullptr;        // +0x14: whole semitones, +/-12
+    LFO *m_pFMDepth = nullptr;          // +0x18: scales the FM amount by 1 + value
+    unsigned int m_nNoisePosition = 0;  // +0x1C
+    OscillatorType m_nType = kSine;     // +0x20
+    ModulationMode m_nModulationMode = kFrequencyModulation; // +0x24: not set by the constructor
+    const short *m_psTable = nullptr;   // +0x28: the table playing
+    const short *m_psCustomTable1 = nullptr; // +0x2C: type 7's table, set by SubSynth
+    const short *m_psCustomTable2 = nullptr; // +0x30: type 8's table
+    bool m_bHQ = false;                 // +0x34
 
-    // Frequency multiplier, the engine's field at offset 0x04. SubSynth writes
-    // oscillator 2's pitch offset here.
-    void setPitchRatio(float ratio) { pitchRatio_ = ratio; }
-    float pitchRatio() const { return pitchRatio_; }
+    // The shared tables, built by GenerateWavetables for the first
+    // oscillator and freed by DestroyWavetables after the last.
+    static short *m_psSinewaveTable;
+    static short *m_psTrianglewaveTable;
+    static short *m_psSawtoothTable;
+    static short *m_psSquarewaveTable;
+    static short *m_psHQSawtoothTable;   // 8 bands, interleaved
+    static short *m_psHQSquarewaveTable; // 8 bands, interleaved
+    static int *m_pasWhitenoiseTable;
+    static int m_nWaveTableRefCount;
 
-    // Fixed phase offset in table entries, the engine's field at 0x0C.
-    void setPhaseOffset(int entries) { phaseOffset_ = entries; }
-    int phaseOffset() const { return phaseOffset_; }
-
-    // Render one block for a voice, as GenerateSignalLQ does. The phase lives
-    // in the control voltage slot for oscillatorIndex, so two oscillators can
-    // share one voice. bend is the machine's pitch-bend ratio.
-    void generate(ControlVoltage &voltage, int oscillatorIndex, int *output, uint numSamples,
-                  const Modulation &modulation, float bend = 1.0f);
-
-    // Standalone use without a voice: set a frequency and render.
-    void setFrequency(float hertz);
-    void resetPhase();
-    uint phase() const { return standalone_.m_anPhase[0]; }
-    void generate(int *output, uint numSamples);
-
-    // The shared tables, built once and reused. Exposed for tests.
-    static const short *table(Type type);
-    static const int *noiseTable();
-
-    // Band-limited table for a type, or nullptr when the type has none.
-    static const short *bandLimitedTable(Type type);
-
-    // WaveTables::FrequencyToWaveTable (0x15c398): the lower of the two bands
-    // an HQ oscillator blends at this frequency, 0..6, and how far towards the
-    // next band it is, 0..1.
-    static int frequencyToWaveTable(float hertz, float *fraction);
-    uint band() const { return band_; }
-    // The blend weight towards band() + 1, Q14: (int)(fraction * 16383).
-    int bandWeight() const { return bandWeight_; }
-
-private:
-    static void buildTables();
-
-    int readTable(uint index, int fraction) const;
-    void generateNoise(int *output, uint numSamples);
-
-    Type type_ = Type::Sine;
-    ModulationMode modulationMode_ = ModulationMode::Frequency;
-    const short *table_ = nullptr;
-    const short *bandTable_ = nullptr;
-    const short *customTables_[2] = {nullptr, nullptr};
-    uint band_ = 0;
-    int bandWeight_ = 0;
-    float pitchRatio_ = 1.0f;
-    int phaseOffset_ = 0;
-    uint noisePosition_ = 0;
-
-    // Voice state used by the standalone generate overload.
-    ControlVoltage standalone_;
+    Oscillator(const Oscillator &) = delete;
+    Oscillator &operator=(const Oscillator &) = delete;
 };
+
+#if UINTPTR_MAX == 0xFFFFFFFF
+static_assert(sizeof(Oscillator) == 0x38, "Oscillator is 0x38 bytes");
+#endif
+
+// The table generators GenerateWavetables calls, with the engine's
+// signatures. frequency puts one cycle in the table; level is the peak.
+void GenerateWavetables();
+void DestroyWavetables();
+void sinewave(short *pBuffer, unsigned int nLength, float fFrequency, float fLevel);
+void trianglewave(short *pBuffer, unsigned int nLength, float fFrequency, float fLevel);
+void sawtooth(short *pBuffer, unsigned int nLength, float fFrequency, float fLevel);
+void squarewave(short *pBuffer, unsigned int nLength, float fFrequency, float fLevel);
+void ASwhitenoise(int *pBuffer, unsigned int nLength, float fLevel);

@@ -22,21 +22,20 @@
 
 using uint = unsigned int;
 
-// Where the machine's modulation sources point: SubSynth's oscillator source
-// pointers, every voice filter's +0x80C, and the volume source at +0x3764.
-// A null pointer stands for the engine's default source, an LFO switched off.
+// Where SubSynth::ConnectLFOs points the machine's modulation inputs: the
+// oscillators' source pointers, every voice filter's +0x80C and the volume
+// source at +0x3764. Null stands for the default source,
+// SubSynthVoice::Shared::defaultSource. Only the inputs an LFO target can
+// reach are listed; the others always read the default source.
 struct SubSynthRouting {
-    // Vibrato, phase, octave, semitone and FM-depth sources per oscillator.
-    // The modulator and amount fields are filled in by the voice.
-    Oscillator::Modulation oscillator1;
-    Oscillator::Modulation oscillator2;
-
-    // The LFO every voice filter reads its cutoff modulation from (+0x80C).
-    // Null stands for the default source, Shared::defaultSource.
-    LFO *cutoff = nullptr;
-
-    // Per-sample Q24 volume modulation: the output is scaled by 1 + value.
-    const int *volume = nullptr;
+    LFO *oscillator1Vibrato = nullptr;    // targets 1 and 3: oscillator 1 +0x00
+    LFO *oscillator1FMDepth = nullptr;    // target 9: oscillator 1 +0x18
+    LFO *oscillator2Vibrato = nullptr;    // targets 2 and 3: oscillator 2 +0x00
+    LFO *oscillator2Phase = nullptr;      // target 4: oscillator 2 +0x08
+    LFO *oscillator2Octave = nullptr;     // target 7: oscillator 2 +0x10
+    LFO *oscillator2Semitones = nullptr;  // target 8: oscillator 2 +0x14
+    LFO *cutoff = nullptr;                // target 5: every voice filter +0x80C
+    LFO *volume = nullptr;                // target 6: SubSynth +0x3764
 
     // Reproduce SubSynth::ConnectLFOs: reset every input to the default
     // source, then aim one input per LFO at its target, LFO 1 first, so LFO 2
@@ -96,10 +95,18 @@ public:
 
         SubSynthRouting routing;
 
-        // SubSynth +0x36A8: the default modulation source. SubSynth's
-        // constructor sets it to LFO::kOff with no depth and generates one
-        // block of zeros; inputs that nothing aims at read it.
+        // SubSynth +0x36A8: the default modulation source, an LFO with the
+        // kOff waveform and no depth that has generated one block of zeros.
+        // Inputs that nothing aims at read it.
         LFO defaultSource;
+
+        // Sets up the default source as SubSynth's constructor does
+        // (0xa0494-0xa04d0) and points every oscillator input at it.
+        Shared();
+
+        // Point the two oscillators' source fields as routing says, the
+        // oscillator half of ConnectLFOs.
+        void connectOscillators();
 
         // The control handlers: SetOscillatorMix and the "Osc2 Waveform" and
         // "Osc1 Mod Amount" branches of OnChildModified.
