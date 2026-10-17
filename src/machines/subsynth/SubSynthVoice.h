@@ -123,7 +123,7 @@ public:
     // own array indexed by voice: the control voltage at +0xCFC, the
     // amplitude envelope at +0x3068, the filter at +0x3768 and the filter
     // envelope at +0xBBA8.
-    ControlVoltage voltage = ControlVoltage::makeDefault();
+    ControlVoltage voltage;
     ADSR amplitudeEnvelope;
     ADSR filterEnvelope;
     // SubSynth's constructor points each filter's envelope at the voice's
@@ -132,7 +132,7 @@ public:
     FixedPointSVFilter filter{true};
     Level level;
 
-    bool isActive() const { return voltage.isActive(); }
+    bool isActive() const { return (voltage.m_nFlags & ControlVoltage::kActiveBit) != 0; }
 
     // filter.m_pEnvelope = &filterEnvelope, as SubSynth's constructor does.
     void setFilterEnvelope() { filter.m_pEnvelope = &filterEnvelope; }

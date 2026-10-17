@@ -36,14 +36,14 @@ Every field the loop touches:
 | 0x00 | byte | low three bits cleared | `FloatSVFilter` |
 | 0x04 | float | 0.0 | both oscillator paths, `SuperOscillator` |
 | 0x08 | int | 0 | — |
-| 0x0C | pointer | null | oscillator every sample; filter once per block |
+| 0x0C | int | 0 | filter once per block (the release position) |
 | 0x10, 0x14, 0x18 | int | 0 | — |
-| 0x1C | pointer | — | standard-quality oscillator |
+| 0x1C | int | — | none of the known readers |
 | 0x20 | int | 0 | — |
 | 0x24 | float | 0.0 | both oscillator paths |
 | 0x28 | float | 0.0 | both oscillator paths, twice per call |
 | 0x2C | float | 0.0 | both oscillator paths |
-| 0x30 | pointer | null | oscillators; `SuperOscillator` in both entry points |
+| 0x30 | uint | 0 | oscillators; `SuperOscillator` in both entry points (the glide length) |
 | 0x34 | int | 0 | — |
 | 0x38 | int | **1** | — |
 | 0x3C | int | 0 | — |
@@ -135,31 +135,58 @@ component has not reached.
 The flag byte is therefore: bit 0 voice active, bit 1 gate open, bit 2 copied
 from the key event.
 
-## What is named, and what is not
+## The port
 
-Named from the writer, the readers and the per-block update together:
-`samplesSinceNoteOn` (0x04), `envelopePosition` (0x08), `releasePosition`
-(0x0C), `phase[2]` (0x10), `frequencyQ12` (0x20), `glideStartPitch` /
-`targetPitch` / `currentPitch` (0x24–0x2C), `glideSamples` (0x30), `noteId`
-(0x3C), `pitchSweep[2]` (0x48), `pitchSweepDecay` (0x50), `frequencyHertz`
-(0x54), `filterCutoffScale` (0x58) and `velocity` (0x5C).
+`ControlVoltage` is ported to the original's structure (`dsp/ControlVoltage.h`).
+It has no methods and no typeinfo, so in the engine it is a plain struct, and
+here it is too:
 
-`velocity` was offset-named until `SubSynth::ProcessChannel` was read: it
-opens with `target = (int)(gain * cv[0x5C] * 16777215)`, where `gain` is the
-float at SubSynth `+0xC1E8`, and the voice's output level glides to that
-target. A float copied from the key event, defaulting to 1.0, that sets the
-output level is the velocity.
+- **Fields only,** with the engine's offsets and types, and defaults equal to
+  those of SubSynth's constructor loop.
+- **Names.** They are ours, in the engine's Hungarian style:
 
-Still offset-named: 0x18, 0x1C, 0x34, 0x38, 0x40 and 0x44.
+  | Offset | Member |
+  |---|---|
+  | 0x00 | `m_nFlags` |
+  | 0x04 | `m_nSamplesSinceNoteOn` |
+  | 0x08 | `m_nEnvelopePosition` |
+  | 0x0C | `m_nReleasePosition` |
+  | 0x10 | `m_anPhase[2]` |
+  | 0x20 | `m_nFrequency` |
+  | 0x24 | `m_fGlideStart` |
+  | 0x28 | `m_fTargetPitch` |
+  | 0x2C | `m_fCurrentPitch` |
+  | 0x30 | `m_nGlideSamples` |
+  | 0x3C | `m_nNoteId` |
+  | 0x48 | `m_afPitchSweep[2]` |
+  | 0x50 | `m_fPitchSweepDecay` |
+  | 0x54 | `m_fFrequency` |
+  | 0x58 | `m_fFilterCutoffScale` |
+  | 0x5C | `m_fVelocity` |
 
-## Host layout versus engine layout
+  0x18, 0x1C, 0x34, 0x38, 0x40 and 0x44 keep their offsets as names
+  (`m_n18`…`m_f44`).
+- **No helper methods.** The old component's methods are gone, because the
+  engine has that code elsewhere:
+  - the note-on writes and key tracking are inline in `SubSynth::PlayChannel`;
+  - the per-block advance is at the end of `ProcessChannel` (`SubSynthVoice`
+    here);
+  - gate tests are bit tests where they are used.
 
-The engine is 32-bit, so its pointers are four bytes and the block is exactly
-0x60. A host struct with native pointers is a different size on a 64-bit build,
-so the header carries both: a usable `ControlVoltage` with real pointers, and a
-`controlVoltageLayout::Engine` mirror with 32-bit handles whose `static_assert`s
-pin every recovered offset. The mirror is compiled, not commented, so the
-offsets cannot drift silently.
+  `tests/support/Voice.h` reproduces note-on, glide, note-off and the
+  advance for tests that drive an oscillator or a filter on their own.
+
+**Correction: `0x1C` is not a pointer.** An earlier reading took
+`ldr r2, [r1, #0x1c]` at `0x8de74` in `GenerateSignalLQ` as a read of the
+control voltage. There, `r1` is the oscillator's octave modulation source
+loaded from `[r8, #0x10]`, an LFO, and the load is that LFO's waveform,
+compared with the default source's `0x07FFFFFF`. None of the known readers
+touch the control voltage's `0x1C`.
+
+So the block holds no pointers, and the struct is the engine's 0x60 bytes on
+every host, 64-bit included. The separate `controlVoltageLayout::Engine`
+mirror is gone: the struct itself carries the `static_assert`s on every
+offset.
 
 ## Still unmapped
 

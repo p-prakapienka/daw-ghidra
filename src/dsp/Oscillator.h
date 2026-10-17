@@ -130,7 +130,7 @@ public:
     // Standalone use without a voice: set a frequency and render.
     void setFrequency(float hertz);
     void resetPhase();
-    uint phase() const { return standalone_.phase[0]; }
+    uint phase() const { return standalone_.m_anPhase[0]; }
     void generate(int *output, uint numSamples);
 
     // The shared tables, built once and reused. Exposed for tests.
@@ -166,5 +166,5 @@ private:
     uint noisePosition_ = 0;
 
     // Voice state used by the standalone generate overload.
-    ControlVoltage standalone_ = ControlVoltage::makeDefault();
+    ControlVoltage standalone_;
 };

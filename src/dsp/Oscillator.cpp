@@ -339,17 +339,17 @@ void Oscillator::generate(ControlVoltage &voltage, int oscillatorIndex, int *out
     // Glide is resolved once per block, before anything else: linear in
     // Q12 hertz from the start to the target over glideSamples, measured from
     // note-on. Reaching the end clears the glide.
-    float pitch = voltage.targetPitch;
-    if (voltage.glideSamples != 0) {
-        float progress = static_cast<float>(voltage.samplesSinceNoteOn)
-                         / static_cast<float>(voltage.glideSamples);
+    float pitch = voltage.m_fTargetPitch;
+    if (voltage.m_nGlideSamples != 0) {
+        float progress = static_cast<float>(voltage.m_nSamplesSinceNoteOn)
+                         / static_cast<float>(voltage.m_nGlideSamples);
         if (progress >= 1.0f) {
             progress = 1.0f;
-            voltage.glideSamples = 0;
+            voltage.m_nGlideSamples = 0;
         }
-        voltage.currentPitch =
-            voltage.glideStartPitch + progress * (voltage.targetPitch - voltage.glideStartPitch);
-        pitch = voltage.currentPitch;
+        voltage.m_fCurrentPitch =
+            voltage.m_fGlideStart + progress * (voltage.m_fTargetPitch - voltage.m_fGlideStart);
+        pitch = voltage.m_fCurrentPitch;
     }
 
     if (type_ == Type::Noise) {
@@ -367,8 +367,8 @@ void Oscillator::generate(ControlVoltage &voltage, int oscillatorIndex, int *out
         bandWeight_ = static_cast<std::int16_t>(static_cast<int>(weight * 16383.0f));
     }
 
-    std::uint32_t &phase = voltage.phase[oscillatorIndex];
-    float &sweep = voltage.pitchSweep[oscillatorIndex];
+    std::uint32_t &phase = voltage.m_anPhase[oscillatorIndex];
+    float &sweep = voltage.m_afPitchSweep[oscillatorIndex];
 
     if (table_ == nullptr && bandTable_ == nullptr) {
         for (uint index = 0; index < numSamples; ++index) {
@@ -453,7 +453,7 @@ void Oscillator::generate(ControlVoltage &voltage, int oscillatorIndex, int *out
         const float increment = (1.0f + sweep) * base * vibrato * fm * stepRatio;
         phase += static_cast<std::uint32_t>(static_cast<std::int32_t>(increment));
 
-        sweep *= voltage.pitchSweepDecay;
+        sweep *= voltage.m_fPitchSweepDecay;
     }
 
     phase &= kPhaseMask;
@@ -461,14 +461,14 @@ void Oscillator::generate(ControlVoltage &voltage, int oscillatorIndex, int *out
 
 void Oscillator::setFrequency(float hertz) {
     const float scaled = hertz * ControlVoltage::kPitchScale;
-    standalone_.targetPitch = scaled;
-    standalone_.currentPitch = scaled;
-    standalone_.glideStartPitch = scaled;
-    standalone_.glideSamples = 0;
+    standalone_.m_fTargetPitch = scaled;
+    standalone_.m_fCurrentPitch = scaled;
+    standalone_.m_fGlideStart = scaled;
+    standalone_.m_nGlideSamples = 0;
 }
 
 void Oscillator::resetPhase() {
-    standalone_.phase[0] = 0;
+    standalone_.m_anPhase[0] = 0;
     noisePosition_ = 0;
 }
 

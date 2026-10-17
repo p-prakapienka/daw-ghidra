@@ -3,6 +3,8 @@
 
 #include <gtest/gtest.h>
 
+#include "../../support/Voice.h"
+
 #include <cmath>
 #include <memory>
 #include <vector>
@@ -110,13 +112,13 @@ TEST(SubSynthAllocation, FillsFreeVoicesThenStealsTheOldest) {
         render(*synth);
     }
     for (unsigned int index = 0; index < 4; ++index) {
-        EXPECT_EQ(synth->voices[index].voltage.noteId, 60 + 2 * static_cast<int>(index));
+        EXPECT_EQ(synth->voices[index].voltage.m_nNoteId, 60 + 2 * static_cast<int>(index));
     }
 
     play(*synth, 68);
     render(*synth);
-    EXPECT_EQ(synth->voices[0].voltage.noteId, 68);
-    EXPECT_EQ(synth->voices[1].voltage.noteId, 62);
+    EXPECT_EQ(synth->voices[0].voltage.m_nNoteId, 68);
+    EXPECT_EQ(synth->voices[1].voltage.m_nNoteId, 62);
     EXPECT_EQ(synth->notesOn(), 4);
 }
 
@@ -129,7 +131,7 @@ TEST(SubSynthAllocation, DropsANoteWhenNoVoiceHasRenderedYet) {
 
     EXPECT_EQ(synth->notesOn(), 4);
     for (unsigned int index = 0; index < 4; ++index) {
-        EXPECT_NE(synth->voices[index].voltage.noteId, 68);
+        EXPECT_NE(synth->voices[index].voltage.m_nNoteId, 68);
     }
 }
 
@@ -200,8 +202,8 @@ TEST(SubSynthSustain, FocusLossReleasesOnlyLiveNotes) {
     synth->focusLost();
 
     EXPECT_FALSE(synth->isSustainDown());
-    EXPECT_TRUE(synth->voices[0].voltage.isGateOpen());
-    EXPECT_FALSE(synth->voices[1].voltage.isGateOpen());
+    EXPECT_TRUE(isGateOpen(synth->voices[0].voltage));
+    EXPECT_FALSE(isGateOpen(synth->voices[1].voltage));
 }
 
 TEST(SubSynthNoteOn, PolyphonicNotesRetriggerAndResetPhase) {
@@ -211,12 +213,12 @@ TEST(SubSynthNoteOn, PolyphonicNotesRetriggerAndResetPhase) {
     render(*synth);
 
     const ControlVoltage &voltage = synth->voices[0].voltage;
-    EXPECT_FLOAT_EQ(voltage.frequencyHertz, 880.0f);
-    EXPECT_FLOAT_EQ(voltage.targetPitch, 880.0f * 4096.0f);
-    EXPECT_EQ(voltage.frequencyQ12, static_cast<std::uint32_t>(880.0f * 4096.0f));
-    EXPECT_FLOAT_EQ(voltage.filterCutoffScale, std::sqrt(880.0f / 500.0f));
-    EXPECT_EQ(voltage.glideSamples, 0u);
-    EXPECT_EQ(voltage.envelopePosition, static_cast<std::int32_t>(kBlock));
+    EXPECT_FLOAT_EQ(voltage.m_fFrequency, 880.0f);
+    EXPECT_FLOAT_EQ(voltage.m_fTargetPitch, 880.0f * 4096.0f);
+    EXPECT_EQ(voltage.m_nFrequency, static_cast<std::uint32_t>(880.0f * 4096.0f));
+    EXPECT_FLOAT_EQ(voltage.m_fFilterCutoffScale, std::sqrt(880.0f / 500.0f));
+    EXPECT_EQ(voltage.m_nGlideSamples, 0u);
+    EXPECT_EQ(voltage.m_nEnvelopePosition, static_cast<std::int32_t>(kBlock));
 }
 
 TEST(SubSynthNoteOn, AMonophonicLineKeepsItsPhase) {
@@ -224,16 +226,16 @@ TEST(SubSynthNoteOn, AMonophonicLineKeepsItsPhase) {
     synth->setPolyphony(1);
     play(*synth, 60);
     render(*synth, 3);
-    const std::uint32_t phaseBefore = synth->voices[0].voltage.phase[0];
+    const std::uint32_t phaseBefore = synth->voices[0].voltage.m_anPhase[0];
     ASSERT_NE(phaseBefore, 0u);
 
     // The only voice is busy, so the note steals it: the envelope restarts
     // but the phase is kept.
     play(*synth, 64);
     synth->processPendingNotes();
-    EXPECT_EQ(synth->voices[0].voltage.phase[0], phaseBefore);
-    EXPECT_EQ(synth->voices[0].voltage.envelopePosition, 0);
-    EXPECT_EQ(synth->voices[0].voltage.glideSamples, 0u);
+    EXPECT_EQ(synth->voices[0].voltage.m_anPhase[0], phaseBefore);
+    EXPECT_EQ(synth->voices[0].voltage.m_nEnvelopePosition, 0);
+    EXPECT_EQ(synth->voices[0].voltage.m_nGlideSamples, 0u);
 }
 
 TEST(SubSynthGlide, SlideGlidesForTheOverlapWithoutRetriggering) {
@@ -241,18 +243,18 @@ TEST(SubSynthGlide, SlideGlidesForTheOverlapWithoutRetriggering) {
     synth->setPolyphony(1);
     play(*synth, 60, 0.0f, 1.0f);
     render(*synth, 2);
-    const float previousPitch = synth->voices[0].voltage.currentPitch;
+    const float previousPitch = synth->voices[0].voltage.m_fCurrentPitch;
 
     play(*synth, 72, 0.5f, 1.0f, SequencerKeyEvent::kSlideFlag);
     synth->processPendingNotes();
 
     const ControlVoltage &voltage = synth->voices[0].voltage;
     // Half a beat of overlap at 120 BPM, 22050 samples per beat.
-    EXPECT_EQ(voltage.glideSamples, 11025u);
-    EXPECT_FLOAT_EQ(voltage.glideStartPitch, previousPitch);
-    EXPECT_FLOAT_EQ(voltage.targetPitch, Keyboard::frequencyFromNoteId(72) * 4096.0f);
-    EXPECT_EQ(voltage.envelopePosition, static_cast<std::int32_t>(2 * kBlock));
-    EXPECT_EQ(voltage.samplesSinceNoteOn, 0);
+    EXPECT_EQ(voltage.m_nGlideSamples, 11025u);
+    EXPECT_FLOAT_EQ(voltage.m_fGlideStart, previousPitch);
+    EXPECT_FLOAT_EQ(voltage.m_fTargetPitch, Keyboard::frequencyFromNoteId(72) * 4096.0f);
+    EXPECT_EQ(voltage.m_nEnvelopePosition, static_cast<std::int32_t>(2 * kBlock));
+    EXPECT_EQ(voltage.m_nSamplesSinceNoteOn, 0);
     EXPECT_EQ(synth->lastMonophonicEvent().note, 72);
 }
 
@@ -265,7 +267,7 @@ TEST(SubSynthGlide, NeverShorterThanATwelfthOfABeat) {
     // Starting after the previous note has ended leaves no overlap.
     play(*synth, 72, 2.0f, 1.0f, SequencerKeyEvent::kSlideFlag);
     synth->processPendingNotes();
-    EXPECT_EQ(synth->voices[0].voltage.glideSamples,
+    EXPECT_EQ(synth->voices[0].voltage.m_nGlideSamples,
               static_cast<std::uint32_t>(SubSynth::kMinimumGlideBeats * 22050.0f));
 }
 
@@ -276,8 +278,8 @@ TEST(SubSynthGlide, SlideIsIgnoredWhenPolyphonic) {
     play(*synth, 72, 0.5f, 1.0f, SequencerKeyEvent::kSlideFlag);
     render(*synth);
 
-    EXPECT_EQ(synth->voices[1].voltage.glideSamples, 0u);
-    EXPECT_EQ(synth->voices[1].voltage.envelopePosition, static_cast<std::int32_t>(kBlock));
+    EXPECT_EQ(synth->voices[1].voltage.m_nGlideSamples, 0u);
+    EXPECT_EQ(synth->voices[1].voltage.m_nEnvelopePosition, static_cast<std::int32_t>(kBlock));
 }
 
 TEST(SubSynthTransport, LFOPositionFollowsSamplesPerBeat) {

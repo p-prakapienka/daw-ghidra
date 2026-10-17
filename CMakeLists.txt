@@ -47,7 +47,6 @@ endif ()
 # the others reproduce the behaviour through an API of our own.
 add_library(engine STATIC
         src/dsp/ADSR.cpp
-        src/dsp/ControlVoltage.cpp
         src/dsp/FixedPointSVFilter.cpp
         src/dsp/LFO.cpp
         src/dsp/Oscillator.cpp

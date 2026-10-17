@@ -34,7 +34,7 @@ inline void Integrate(int nInput, int nFeedback, int nCutoff, int nGain, int &nB
 void FixedPointSVFilter::ProcessCV(ControlVoltage *pCV, int *pBuffer, unsigned int nSamples,
                                    int nChannels) {
     // The cutoff base and the voice's key tracking are combined once per call.
-    const float fTrackedCutoff = m_fCutoff * pCV->filterCutoffScale;
+    const float fTrackedCutoff = m_fCutoff * pCV->m_fFilterCutoffScale;
     const bool bStereo = nChannels == 2;
 
     int nFeedback = 0xFFFFFF - Mul24(m_nDamping, m_nCutoff);
@@ -49,9 +49,9 @@ void FixedPointSVFilter::ProcessCV(ControlVoltage *pCV, int *pBuffer, unsigned i
         // The engine leaves this uninitialised; the default envelope writes
         // nothing, so it is zeroed here instead of read uninitialised.
         short sEnvelope = 0;
-        const bool bGate = (pCV->flags & ControlVoltage::kGateBit) != 0;
+        const bool bGate = (pCV->m_nFlags & ControlVoltage::kGateBit) != 0;
         const unsigned int nPosition =
-            static_cast<unsigned int>(bGate ? pCV->envelopePosition : pCV->releasePosition);
+            static_cast<unsigned int>(bGate ? pCV->m_nEnvelopePosition : pCV->m_nReleasePosition);
         m_pEnvelope->GenerateValues(nPosition + nOffset, bGate ? 1 : 0, &sEnvelope, 1);
 
         float fEnvelope = static_cast<float>(sEnvelope) / 32767.0f;

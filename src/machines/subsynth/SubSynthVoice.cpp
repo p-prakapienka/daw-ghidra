@@ -76,9 +76,10 @@ void SubSynthVoice::crossfade(const int *from, int *into, std::int32_t mixQ24, u
 }
 
 void SubSynthVoice::applyAmplitudeEnvelope(int *buffer, uint numSamples) {
-    const uint gate = voltage.isGateOpen() ? 1u : 0u;
-    const auto position = static_cast<uint>(voltage.envelopePositionForGate());
-    amplitudeEnvelope.GenerateValues(position, gate, envelopeBuffer_.data(), numSamples);
+    const bool gate = (voltage.m_nFlags & ControlVoltage::kGateBit) != 0;
+    const auto position =
+        static_cast<uint>(gate ? voltage.m_nEnvelopePosition : voltage.m_nReleasePosition);
+    amplitudeEnvelope.GenerateValues(position, gate ? 1u : 0u, envelopeBuffer_.data(), numSamples);
     for (uint index = 0; index < numSamples; ++index) {
         buffer[index] = multiply24(buffer[index], envelopeBuffer_[index] << 9);
     }
@@ -94,7 +95,7 @@ void SubSynthVoice::process(Shared &shared, int *output, uint numSamples) {
     int *second = oscillator2Buffer_.data();
 
     // The target is recomputed every block; the smoother below chases it.
-    level.target = levelTarget(shared.voiceGain, voltage.velocity);
+    level.target = levelTarget(shared.voiceGain, voltage.m_fVelocity);
 
     // Oscillator 2 first, into its own buffer, with no modulator of its own.
     if (shared.oscillator2Enabled) {
@@ -133,12 +134,18 @@ void SubSynthVoice::process(Shared &shared, int *output, uint numSamples) {
         output[index] += multiply24(mix[index], multiply24(level.current, lift));
     }
 
-    voltage.advance(numSamples);
+    // Both note counters move every block, the release counter only while
+    // the gate is closed (0x9cae4-0x9cb18).
+    voltage.m_nSamplesSinceNoteOn += static_cast<std::int32_t>(numSamples);
+    voltage.m_nEnvelopePosition += static_cast<std::int32_t>(numSamples);
+    if ((voltage.m_nFlags & ControlVoltage::kGateBit) == 0) {
+        voltage.m_nReleasePosition += static_cast<std::int32_t>(numSamples);
+    }
 
     // The amplitude envelope decides when the voice ends. Ending it also
     // drops the filter's integrator state.
-    if (amplitudeEnvelope.IsDone(static_cast<uint>(voltage.releasePosition))) {
-        voltage.flags = static_cast<std::uint8_t>(voltage.flags & ~ControlVoltage::kActiveBit);
+    if (amplitudeEnvelope.IsDone(static_cast<uint>(voltage.m_nReleasePosition))) {
+        voltage.m_nFlags = static_cast<std::uint8_t>(voltage.m_nFlags & ~ControlVoltage::kActiveBit);
         filter.m_anBand[0] = 0;
         filter.m_anBand[1] = 0;
         filter.m_anLow[0] = 0;
