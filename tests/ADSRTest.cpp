@@ -127,7 +127,7 @@ TEST(ADSRRelease, FallsFromTheLevelHeldAtNoteOff) {
 }
 
 TEST(ADSRRelease, ReportsDoneAfterTheTail) {
-    const ADSR envelope = makeEnvelope(ADSR::Curve::Linear);
+    ADSR envelope = makeEnvelope(ADSR::Curve::Linear);
     const auto releaseLength = envelope.releaseSamples();
 
     EXPECT_FALSE(envelope.IsDone(releaseLength));

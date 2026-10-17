@@ -1,7 +1,5 @@
 #include "components/ControlVoltage.h"
 
-#include "components/StateVariableFilter.h"
-
 #include <gtest/gtest.h>
 
 TEST(ControlVoltageDefaults, MatchTheConstructorBlock) {
@@ -18,42 +16,6 @@ TEST(ControlVoltageDefaults, MatchTheConstructorBlock) {
     EXPECT_FLOAT_EQ(voltage.currentPitch, 0.0f);
     EXPECT_FLOAT_EQ(voltage.pitchSweepDecay, 0.0f);
     EXPECT_EQ(voltage.glideSamples, 0u);
-}
-
-TEST(ControlVoltageDefaults, LeaveTheFilterCutoffUntouched) {
-    const ControlVoltage voltage = ControlVoltage::makeDefault();
-
-    StateVariableFilter withVoltage(true);
-    withVoltage.setCutoffWithVoltage(0.5f, voltage);
-
-    StateVariableFilter plain(true);
-    plain.setCutoff(0.5f);
-
-    EXPECT_EQ(withVoltage.getCutoffCoefficient(), plain.getCutoffCoefficient());
-}
-
-TEST(ControlVoltageScaling, ClosesTheFilterAsTheScaleFalls) {
-    ControlVoltage voltage = ControlVoltage::makeDefault();
-
-    StateVariableFilter open(true);
-    open.setCutoffWithVoltage(0.8f, voltage);
-
-    voltage.filterCutoffScale = 0.25f;
-    StateVariableFilter closed(true);
-    closed.setCutoffWithVoltage(0.8f, voltage);
-
-    EXPECT_LT(closed.getCutoffCoefficient(), open.getCutoffCoefficient());
-}
-
-TEST(ControlVoltageScaling, AZeroScaleCollapsesToTheCutoffFloor) {
-    ControlVoltage voltage = ControlVoltage::makeDefault();
-    voltage.filterCutoffScale = 0.0f;
-
-    StateVariableFilter filter(true);
-    filter.setCutoffWithVoltage(1.0f, voltage);
-
-    EXPECT_EQ(filter.getCutoffCoefficient(),
-              filter.getCutoffTableEntry(StateVariableFilter::kMinimumCutoffIndex));
 }
 
 TEST(ControlVoltageLayout, EngineBlockIsNinetySixBytes) {
@@ -99,19 +61,6 @@ TEST(ControlVoltageTracking, FollowsASquareRootOfTheFrequencyRatio) {
     EXPECT_FLOAT_EQ(ControlVoltage::trackingScale(2000.0f, 0.5f), 1.5f);
     EXPECT_LT(ControlVoltage::trackingScale(125.0f, 1.0f), 1.0f);
     EXPECT_FLOAT_EQ(ControlVoltage::trackingScale(125.0f, 1.0f), 0.5f);
-}
-
-TEST(ControlVoltageTracking, ReachesTheFilterThroughNoteOn) {
-    ControlVoltage voltage = ControlVoltage::makeDefault();
-    voltage.noteOn(2000.0f, 96, 1.0f, 1.0f);
-
-    StateVariableFilter tracked(true);
-    tracked.setCutoffWithVoltage(0.3f, voltage);
-
-    StateVariableFilter fixed(true);
-    fixed.setCutoff(0.6f);
-
-    EXPECT_EQ(tracked.getCutoffCoefficient(), fixed.getCutoffCoefficient());
 }
 
 TEST(ControlVoltageGlide, StartsFromTheCurrentPitchAndTargetsTheNewNote) {

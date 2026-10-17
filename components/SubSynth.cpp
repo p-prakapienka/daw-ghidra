@@ -28,6 +28,7 @@ SubSynth::SubSynth() : pitchSweepDecay(kSweepDownDecay) {
     shared.oscillator2.setCustomTables(customWavetables_[0].data(), customWavetables_[1].data());
 
     for (SubSynthVoice &voice : voices) {
+        voice.setFilterEnvelope();
         ADSR &filter = voice.filterEnvelope;
         filter.SetMinSamples(10, 20, 200);
         filter.setAttackSeconds(0.0f);

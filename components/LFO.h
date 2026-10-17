@@ -86,6 +86,7 @@ public:
     void generate(uint songPosition, uint numSamples);
 
     const std::int32_t *output() const { return output_; }
+    std::int32_t *output() { return output_; }
     uint periodSamples() const { return period_; }
     Waveform waveform() const { return waveform_; }
     float rate() const { return rate_; }

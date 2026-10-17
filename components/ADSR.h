@@ -11,10 +11,14 @@
 // GenerateValues follows the original's structure, one loop per curve per
 // segment, because the curves are not handled alike (see the notes).
 
+#include "../src/Envelope.h"
+
 using uint = unsigned int;
 using ushort = unsigned short;
 
-class ADSR {
+// ADSR derives from Envelope, the two-entry vtable (IsDone, GenerateValues)
+// that FixedPointSVFilter calls its envelope through.
+class ADSR : public Envelope {
 public:
     // Segment shape. The engine stores one of these per segment as a plain int.
     enum class Curve : int {
@@ -68,10 +72,10 @@ public:
     //
     // position is the sample offset since the last gate change. gate is
     // non-zero while the note is held; passing zero runs the release segment.
-    void GenerateValues(uint position, uint gate, short *output, uint numSamples);
+    void GenerateValues(uint position, uint gate, short *output, uint numSamples) override;
 
     // True once the release segment and its tail have elapsed.
-    bool IsDone(uint position) const;
+    bool IsDone(uint position) override;
 
     // Resolved segment lengths, for tests and for drawing the envelope.
     uint attackSamples() const { return attackSamples_; }

@@ -325,14 +325,14 @@ void SubSynthControls::applyEffect(int id) {
         break;
     case 17:
         for (SubSynthVoice &voice : synth_.voices) {
-            voice.filter.setCutoffBase(v);
-            voice.filter.resolveFromBases();
+            voice.filter.m_fCutoff = v;
+            voice.filter.UpdateCoefficients(voice.filter.m_fCutoff, voice.filter.m_fResonance);
         }
         break;
     case 18:
         for (SubSynthVoice &voice : synth_.voices) {
-            voice.filter.setResonanceBase(v);
-            voice.filter.resolveFromBases();
+            voice.filter.m_fResonance = v;
+            voice.filter.UpdateCoefficients(voice.filter.m_fCutoff, voice.filter.m_fResonance);
         }
         break;
     case 19: {
@@ -340,8 +340,9 @@ void SubSynthControls::applyEffect(int id) {
         const bool invert = type > 3;
         const int mode = invert ? type - 3 : type;
         for (SubSynthVoice &voice : synth_.voices) {
-            voice.filter.setMode(static_cast<StateVariableFilter::Mode>(mode));
-            voice.filter.setInvertEnvelope(invert);
+            voice.filter.m_nMode = mode;
+            voice.filter.OnParamModified();
+            voice.filter.m_bInvertEnvelope = invert;
         }
         break;
     }

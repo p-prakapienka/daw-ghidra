@@ -235,8 +235,8 @@ ci = c < 0.05 ? 12 : c > 1 ? 255 : (int)(c · 255)
 The base is `+0x841 ? 1.0 : 1.25`, the same as the filter's constructor and
 `ProcessCV`. SubSynth constructs its filters with the flag set, so its input
 gain runs from 1.0 down to 0.325 at the 0.9 resonance limit.
-`StateVariableFilter` had the two bases swapped until the fix that followed
-this table (see the correction in `StateVariableFilter.md`).
+The filter component had the two bases swapped until the fix that followed
+this table (see the correction in `src/FixedPointSVFilter.md`).
 
 ### Filter type (`0x9fb20`)
 
@@ -374,7 +374,10 @@ alone, as `SetOscillatorType`'s jump table does.
 
 What the branches need from the other components:
 
-- `StateVariableFilter::resolveFromBases()`, the coefficient resolution the
-  cutoff and resonance branches run;
-- read accessors on `ADSR`, `LFO`, `Oscillator` and `StateVariableFilter`,
+- `FixedPointSVFilter::UpdateCoefficients`, the coefficient update the cutoff
+  and resonance branches run inline in the engine. They write `m_fCutoff` or
+  `m_fResonance`, then update from both. The filter-type branch writes
+  `m_nMode`, calls `OnParamModified` (vtable slot 2, a no-op), then writes
+  `m_bInvertEnvelope`, in that order;
+- read accessors on `ADSR`, `LFO` and `Oscillator`,
   for the tests.

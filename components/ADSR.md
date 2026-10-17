@@ -16,6 +16,12 @@ ADSR::GenerateValues(uint, uint, short*, uint)        0x7f708  3428 bytes
 Sibling classes `AREnvelope` and `DecayEnvelope` have the same five-method
 shape and are cut-down versions of this one.
 
+All three derive from `Envelope` (typeinfo), whose vtable holds only `IsDone`
+and `GenerateValues`, with no destructor. `ADSR` derives from it here too
+(`src/Envelope.h`), with `IsDone` non-const as the engine's virtual is, so
+`FixedPointSVFilter` can call a voice's filter envelope through
+`Envelope*`.
+
 ## Parameters
 
 `OnParamModified` converts seconds to samples and clamps:
