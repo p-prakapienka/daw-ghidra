@@ -2,6 +2,8 @@
 
 #include <gtest/gtest.h>
 
+#include "../support/Voice.h"
+
 #include <algorithm>
 #include <cmath>
 #include <numbers>
@@ -26,10 +28,10 @@ ADSR sustainedEnvelope(float sustain) {
 }
 
 ControlVoltage heldVoice(float hertz, float tracking = 0.0f) {
-    ControlVoltage voltage = ControlVoltage::makeDefault();
-    voltage.noteOn(hertz, 60, tracking, 1.0f);
+    ControlVoltage voltage = ControlVoltage{};
+    noteOn(voltage, hertz, 60, tracking, 1.0f);
     // Past the attack and decay minimums so the envelope sits at sustain.
-    voltage.advance(1000);
+    advance(voltage, 1000);
     return voltage;
 }
 
@@ -282,8 +284,8 @@ TEST(FixedPointSVFilterControlBlock, ModulationLiftsTheCutoffMultiplicatively) {
 
 TEST(FixedPointSVFilterControlBlock, ReleaseUsesTheReleasePosition) {
     Rig rig;
-    rig.voltage.noteOff();
-    rig.voltage.advance(20000); // well past the release: the envelope reads zero
+    noteOff(rig.voltage);
+    advance(rig.voltage, 20000); // well past the release: the envelope reads zero
     rig.filter.m_nMode = 1;
     rig.filter.m_fCutoff = 0.9f;
     rig.controlBlock();

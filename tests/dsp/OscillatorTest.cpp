@@ -2,6 +2,8 @@
 
 #include <gtest/gtest.h>
 
+#include "../support/Voice.h"
+
 #include <cmath>
 #include <cstdint>
 #include <numbers>
@@ -101,8 +103,8 @@ TEST(OscillatorBands, FrequencyPicksTheLowerOfTwoBandsAndAWeight) {
 }
 
 TEST(OscillatorBands, HQPlaybackRecordsBandAndWeight) {
-    ControlVoltage voltage = ControlVoltage::makeDefault();
-    voltage.noteOn(440.0f, 69, 0.0f, 1.0f);
+    ControlVoltage voltage = ControlVoltage{};
+    noteOn(voltage, 440.0f, 69, 0.0f, 1.0f);
     Oscillator osc;
     osc.setType(Oscillator::Type::SawtoothHQ);
     std::vector<int> output(16);
@@ -242,19 +244,19 @@ TEST(OscillatorBands, BandLimitedSquareKeepsOnlyOddHarmonics) {
 }
 
 TEST(OscillatorVoice, KeepsEachOscillatorsPhaseInItsOwnSlot) {
-    ControlVoltage voltage = ControlVoltage::makeDefault();
-    voltage.noteOn(441.0f, 69, 0.0f, 1.0f);
+    ControlVoltage voltage = ControlVoltage{};
+    noteOn(voltage, 441.0f, 69, 0.0f, 1.0f);
     Oscillator oscillator;
     std::vector<int> buffer(100);
     oscillator.generate(voltage, 1, buffer.data(), 100, Oscillator::Modulation{});
-    EXPECT_EQ(voltage.phase[0], 0u);
-    EXPECT_NE(voltage.phase[1], 0u);
-    EXPECT_LE(voltage.phase[1], Oscillator::kPhaseMask);
+    EXPECT_EQ(voltage.m_anPhase[0], 0u);
+    EXPECT_NE(voltage.m_anPhase[1], 0u);
+    EXPECT_LE(voltage.m_anPhase[1], Oscillator::kPhaseMask);
 }
 
 TEST(OscillatorVoice, BendScalesThePitch) {
-    ControlVoltage voltage = ControlVoltage::makeDefault();
-    voltage.noteOn(441.0f, 69, 0.0f, 1.0f);
+    ControlVoltage voltage = ControlVoltage{};
+    noteOn(voltage, 441.0f, 69, 0.0f, 1.0f);
     Oscillator oscillator;
     std::vector<int> buffer(44100);
     oscillator.generate(voltage, 0, buffer.data(), 44100, Oscillator::Modulation{}, 0.5f);
@@ -263,35 +265,35 @@ TEST(OscillatorVoice, BendScalesThePitch) {
 }
 
 TEST(OscillatorVoice, GlideIsLinearInHertzAndClearsItself) {
-    ControlVoltage voltage = ControlVoltage::makeDefault();
-    voltage.noteOn(220.0f, 57, 0.0f, 1.0f);
-    voltage.beginGlide(440.0f, 1000);
+    ControlVoltage voltage = ControlVoltage{};
+    noteOn(voltage, 220.0f, 57, 0.0f, 1.0f);
+    beginGlide(voltage, 440.0f, 1000);
     Oscillator oscillator;
     std::vector<int> buffer(1);
-    voltage.samplesSinceNoteOn = 500;
+    voltage.m_nSamplesSinceNoteOn = 500;
     oscillator.generate(voltage, 0, buffer.data(), 1, Oscillator::Modulation{});
-    EXPECT_FLOAT_EQ(voltage.currentPitch / ControlVoltage::kPitchScale, 330.0f);
-    EXPECT_NE(voltage.glideSamples, 0u);
-    voltage.samplesSinceNoteOn = 1000;
+    EXPECT_FLOAT_EQ(voltage.m_fCurrentPitch / ControlVoltage::kPitchScale, 330.0f);
+    EXPECT_NE(voltage.m_nGlideSamples, 0u);
+    voltage.m_nSamplesSinceNoteOn = 1000;
     oscillator.generate(voltage, 0, buffer.data(), 1, Oscillator::Modulation{});
-    EXPECT_FLOAT_EQ(voltage.currentPitch / ControlVoltage::kPitchScale, 440.0f);
-    EXPECT_EQ(voltage.glideSamples, 0u);
+    EXPECT_FLOAT_EQ(voltage.m_fCurrentPitch / ControlVoltage::kPitchScale, 440.0f);
+    EXPECT_EQ(voltage.m_nGlideSamples, 0u);
 }
 
 TEST(OscillatorVoice, PitchSweepRaisesThenDecays) {
-    ControlVoltage voltage = ControlVoltage::makeDefault();
-    voltage.noteOn(441.0f, 69, 0.0f, 1.0f, 1.0f, 0.999f);
+    ControlVoltage voltage = ControlVoltage{};
+    noteOn(voltage, 441.0f, 69, 0.0f, 1.0f, 1.0f, 0.999f);
     Oscillator oscillator;
     std::vector<int> buffer(44100);
     oscillator.generate(voltage, 0, buffer.data(), 44100, Oscillator::Modulation{});
     EXPECT_GT(countRisingZeroCrossings(buffer), 441);
     EXPECT_LT(countRisingZeroCrossings(buffer), 882);
-    EXPECT_LT(voltage.pitchSweep[0], 1e-6f);
+    EXPECT_LT(voltage.m_afPitchSweep[0], 1e-6f);
 }
 
 TEST(OscillatorModulation, OctaveInputIsFlooredToWholeOctaves) {
-    ControlVoltage voltage = ControlVoltage::makeDefault();
-    voltage.noteOn(441.0f, 69, 0.0f, 1.0f);
+    ControlVoltage voltage = ControlVoltage{};
+    noteOn(voltage, 441.0f, 69, 0.0f, 1.0f);
     std::vector<int> octave(44100, static_cast<int>(0.3 * (1 << 24)));
     Oscillator::Modulation modulation;
     modulation.octave = octave.data();
@@ -303,8 +305,8 @@ TEST(OscillatorModulation, OctaveInputIsFlooredToWholeOctaves) {
 }
 
 TEST(OscillatorModulation, FrequencyModulationFollowsTheInput) {
-    ControlVoltage plainVoice = ControlVoltage::makeDefault();
-    plainVoice.noteOn(441.0f, 69, 0.0f, 1.0f);
+    ControlVoltage plainVoice = ControlVoltage{};
+    noteOn(plainVoice, 441.0f, 69, 0.0f, 1.0f);
     ControlVoltage modulatedVoice = plainVoice;
     std::vector<int> input(44100, 1 << 23);
     Oscillator::Modulation fm;
@@ -320,8 +322,8 @@ TEST(OscillatorModulation, FrequencyModulationFollowsTheInput) {
 }
 
 TEST(OscillatorModulation, PhaseModeShiftsTheTableIndex) {
-    ControlVoltage shiftedVoice = ControlVoltage::makeDefault();
-    shiftedVoice.noteOn(441.0f, 69, 0.0f, 1.0f);
+    ControlVoltage shiftedVoice = ControlVoltage{};
+    noteOn(shiftedVoice, 441.0f, 69, 0.0f, 1.0f);
     ControlVoltage offsetVoice = shiftedVoice;
 
     // Input 0x400001 at unity amount gives a product of exactly 0x400000: a
@@ -342,12 +344,12 @@ TEST(OscillatorModulation, PhaseModeShiftsTheTableIndex) {
     offset.generate(offsetVoice, 0, reference.data(), 4096, Oscillator::Modulation{});
 
     EXPECT_EQ(shifted, reference);
-    EXPECT_EQ(shiftedVoice.phase[0], offsetVoice.phase[0]);
+    EXPECT_EQ(shiftedVoice.m_anPhase[0], offsetVoice.m_anPhase[0]);
 }
 
 TEST(OscillatorModulation, AmplitudeModeScalesTheSample) {
-    ControlVoltage plainVoice = ControlVoltage::makeDefault();
-    plainVoice.noteOn(441.0f, 69, 0.0f, 1.0f);
+    ControlVoltage plainVoice = ControlVoltage{};
+    noteOn(plainVoice, 441.0f, 69, 0.0f, 1.0f);
     ControlVoltage modulatedVoice = plainVoice;
 
     // A constant -0.5 at unity amount halves the output and leaves the pitch.
@@ -370,12 +372,12 @@ TEST(OscillatorModulation, AmplitudeModeScalesTheSample) {
             (static_cast<std::int64_t>(reference[index]) * ((1 << 24) - 1 - (1 << 23))) >> 24);
         ASSERT_EQ(scaled[index], expected);
     }
-    EXPECT_EQ(plainVoice.phase[0], modulatedVoice.phase[0]);
+    EXPECT_EQ(plainVoice.m_anPhase[0], modulatedVoice.m_anPhase[0]);
 }
 
 TEST(OscillatorModulation, OtherModesLeavePhaseAndOutputAlone) {
-    ControlVoltage voltage = ControlVoltage::makeDefault();
-    voltage.noteOn(441.0f, 69, 0.0f, 1.0f);
+    ControlVoltage voltage = ControlVoltage{};
+    noteOn(voltage, 441.0f, 69, 0.0f, 1.0f);
 
     Oscillator oscillator;
     oscillator.setModulationMode(static_cast<Oscillator::ModulationMode>(3));
@@ -385,5 +387,5 @@ TEST(OscillatorModulation, OtherModesLeavePhaseAndOutputAlone) {
     for (const int value : buffer) {
         EXPECT_EQ(value, 123);
     }
-    EXPECT_EQ(voltage.phase[0], 0u);
+    EXPECT_EQ(voltage.m_anPhase[0], 0u);
 }

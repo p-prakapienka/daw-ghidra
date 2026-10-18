@@ -2,6 +2,8 @@
 
 #include <gtest/gtest.h>
 
+#include "../../support/Voice.h"
+
 #include <algorithm>
 #include <cmath>
 #include <cstdint>
@@ -14,7 +16,7 @@ constexpr unsigned int kBlock = 128;
 
 void startNote(SubSynthVoice &voice, float hertz, float velocity) {
     voice.setFilterEnvelope();
-    voice.voltage.noteOn(hertz, 69, 0.0f, velocity);
+    noteOn(voice.voltage, hertz, 69, 0.0f, velocity);
     voice.level.smoothing = SubSynthVoice::kLevelSmoothing;
     voice.amplitudeEnvelope.OnParamModified();
     voice.filterEnvelope.OnParamModified();
@@ -280,7 +282,7 @@ TEST(SubSynthVoice, EndsWhenTheAmplitudeEnvelopeIsDone) {
     render(voice, shared, 1024);
     EXPECT_TRUE(voice.isActive());
 
-    voice.voltage.noteOff();
+    noteOff(voice.voltage);
     const unsigned int tail =
         voice.amplitudeEnvelope.m_nReleaseSamples + 0x800u;
     render(voice, shared, tail);
