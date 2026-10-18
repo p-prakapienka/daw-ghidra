@@ -151,14 +151,14 @@ TEST(SubSynthControlTable, FilterTypeSplitsModeAndInvert) {
     Rig rig;
     rig.controls.set(19, 5.0f); // Inv. HP
     for (const auto &voice : rig.synth->voices) {
-        EXPECT_EQ(voice.filter.getMode(), StateVariableFilter::Mode::HighPass);
-        EXPECT_TRUE(voice.filter.getInvertEnvelope());
+        EXPECT_EQ(voice.filter.m_nMode, 2);
+        EXPECT_TRUE(voice.filter.m_bInvertEnvelope);
     }
     rig.controls.set(19, 2.0f); // HighPass
-    EXPECT_EQ(rig.synth->voices[0].filter.getMode(), StateVariableFilter::Mode::HighPass);
-    EXPECT_FALSE(rig.synth->voices[0].filter.getInvertEnvelope());
+    EXPECT_EQ(rig.synth->voices[0].filter.m_nMode, 2);
+    EXPECT_FALSE(rig.synth->voices[0].filter.m_bInvertEnvelope);
     rig.controls.set(19, 0.0f);
-    EXPECT_EQ(rig.synth->voices[0].filter.getMode(), StateVariableFilter::Mode::Bypass);
+    EXPECT_EQ(rig.synth->voices[0].filter.m_nMode, 0);
 }
 
 TEST(SubSynthControlTable, CutoffAndResonanceResolveAtOnce) {
@@ -166,10 +166,10 @@ TEST(SubSynthControlTable, CutoffAndResonanceResolveAtOnce) {
     rig.controls.set(17, 0.5f);
     rig.controls.set(18, 0.4f);
     for (const auto &voice : rig.synth->voices) {
-        EXPECT_EQ(voice.filter.getCutoffBase(), 0.5f);
-        EXPECT_EQ(voice.filter.getCutoffCoefficient(), voice.filter.getCutoffTableEntry(127));
-        EXPECT_EQ(voice.filter.getDampingCoefficient(), voice.filter.getDampingTableEntry(102));
-        EXPECT_EQ(voice.filter.getInputGain(),
+        EXPECT_EQ(voice.filter.m_fCutoff, 0.5f);
+        EXPECT_EQ(voice.filter.m_nCutoff, voice.filter.m_anCutoffTable[127]);
+        EXPECT_EQ(voice.filter.m_nDamping, voice.filter.m_anDampingTable[102]);
+        EXPECT_EQ(voice.filter.m_nInputGain,
                   static_cast<int>((1.0f + -0.75f * 0.4f) * 16777215.0f));
     }
 }

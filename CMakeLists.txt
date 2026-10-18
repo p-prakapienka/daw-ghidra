@@ -37,11 +37,11 @@ if (DAW_GHIDRA_BUILD_TESTS)
     )
 endif ()
 
-# Reconstructed engine components. New components are added here and are then
-# available to both the bench executable and the tests.
+# Reconstructed engine code. src/ holds classes ported to the original's
+# structure; components/ the rest, until each is ported.
 add_library(components STATIC
+        src/FixedPointSVFilter.cpp
         components/ADSR.cpp
-        components/StateVariableFilter.cpp
         components/CustomWaveform.cpp
         components/Oscillator.cpp
         components/ControlVoltage.cpp
@@ -71,7 +71,7 @@ if (DAW_GHIDRA_BUILD_TESTS)
 
     add_executable(components_tests
             tests/ADSRTest.cpp
-            tests/StateVariableFilterTest.cpp
+            tests/FixedPointSVFilterTest.cpp
             tests/OscillatorTest.cpp
             tests/ControlVoltageTest.cpp
             tests/CustomWaveformTest.cpp

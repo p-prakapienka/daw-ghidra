@@ -18,7 +18,7 @@
 #include "ControlVoltage.h"
 #include "LFO.h"
 #include "Oscillator.h"
-#include "StateVariableFilter.h"
+#include "../src/FixedPointSVFilter.h"
 
 using uint = unsigned int;
 
@@ -31,8 +31,9 @@ struct SubSynthRouting {
     Oscillator::Modulation oscillator1;
     Oscillator::Modulation oscillator2;
 
-    // Per-sample Q24 cutoff modulation, shared by every voice filter.
-    const int *cutoff = nullptr;
+    // The LFO every voice filter reads its cutoff modulation from (+0x80C).
+    // Null stands for the default source, Shared::defaultSource.
+    LFO *cutoff = nullptr;
 
     // Per-sample Q24 volume modulation: the output is scaled by 1 + value.
     const int *volume = nullptr;
@@ -95,6 +96,10 @@ public:
 
         SubSynthRouting routing;
 
+        // SubSynth +0x36A8: the default modulation source, an LFO left
+        // switched off. Its output stays zero; inputs nothing aims at read it.
+        LFO defaultSource;
+
         // The control handlers: SetOscillatorMix and the "Osc2 Waveform" and
         // "Osc1 Mod Amount" branches of OnChildModified.
         void setMix(float mix);
@@ -120,10 +125,16 @@ public:
     ControlVoltage voltage = ControlVoltage::makeDefault();
     ADSR amplitudeEnvelope;
     ADSR filterEnvelope;
-    StateVariableFilter filter{true};
+    // SubSynth's constructor points each filter's envelope at the voice's
+    // filter envelope (+0x814); so does setFilterEnvelope for a voice built
+    // on its own.
+    FixedPointSVFilter filter{true};
     Level level;
 
     bool isActive() const { return voltage.isActive(); }
+
+    // filter.m_pEnvelope = &filterEnvelope, as SubSynth's constructor does.
+    void setFilterEnvelope() { filter.m_pEnvelope = &filterEnvelope; }
 
     // Render one block and add it to output, as ProcessChannel does. The
     // caller skips voices that are not active, as SubSynth::Process does.

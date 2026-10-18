@@ -15,6 +15,7 @@ constexpr int kOne24 = 0x00FFFFFF;
 // Aim one LFO at its target, the body of one ConnectLFOs switch.
 void aim(SubSynthRouting &routing, LFO &lfo, LFO::Target target) {
     const int *source = lfo.output();
+    LFO *const object = &lfo;
     switch (target) {
     case LFO::Target::Oscillator1Pitch: routing.oscillator1.vibrato = source; break;
     case LFO::Target::Oscillator2Pitch: routing.oscillator2.vibrato = source; break;
@@ -23,7 +24,7 @@ void aim(SubSynthRouting &routing, LFO &lfo, LFO::Target target) {
         routing.oscillator2.vibrato = source;
         break;
     case LFO::Target::Oscillator2Phase: routing.oscillator2.phase = source; break;
-    case LFO::Target::Cutoff: routing.cutoff = source; break;
+    case LFO::Target::Cutoff: routing.cutoff = object; break;
     case LFO::Target::Volume: routing.volume = source; break;
     case LFO::Target::Oscillator2Octave: routing.oscillator2.octave = source; break;
     case LFO::Target::Oscillator2Semitones: routing.oscillator2.semitones = source; break;
@@ -118,11 +119,9 @@ void SubSynthVoice::process(Shared &shared, int *output, uint numSamples) {
 
     applyAmplitudeEnvelope(mix, numSamples);
 
-    StateVariableFilter::VoiceInputs inputs;
-    inputs.voltage = &voltage;
-    inputs.envelope = &filterEnvelope;
-    inputs.modulation = shared.routing.cutoff;
-    filter.processVoice(inputs, mix, numSamples, 1);
+    filter.m_pModulation =
+        shared.routing.cutoff != nullptr ? shared.routing.cutoff : &shared.defaultSource;
+    filter.ProcessCV(&voltage, mix, numSamples, 1);
 
     // Level smoothing, volume modulation and accumulation, per sample. The
     // default volume source contributes zero, so the factor is 0xFFFFFF, not
@@ -140,6 +139,9 @@ void SubSynthVoice::process(Shared &shared, int *output, uint numSamples) {
     // drops the filter's integrator state.
     if (amplitudeEnvelope.IsDone(static_cast<uint>(voltage.releasePosition))) {
         voltage.flags = static_cast<std::uint8_t>(voltage.flags & ~ControlVoltage::kActiveBit);
-        filter.reset();
+        filter.m_anBand[0] = 0;
+        filter.m_anBand[1] = 0;
+        filter.m_anLow[0] = 0;
+        filter.m_anLow[1] = 0;
     }
 }

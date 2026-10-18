@@ -13,6 +13,7 @@ namespace {
 constexpr unsigned int kBlock = 128;
 
 void startNote(SubSynthVoice &voice, float hertz, float velocity) {
+    voice.setFilterEnvelope();
     voice.voltage.noteOn(hertz, 69, 0.0f, velocity);
     voice.level.smoothing = SubSynthVoice::kLevelSmoothing;
     voice.amplitudeEnvelope.OnParamModified();
@@ -108,7 +109,7 @@ TEST(SubSynthRouting, LFO2WinsASharedTarget) {
     LFO lfo2;
     const SubSynthRouting routing =
         SubSynthRouting::connect(lfo1, LFO::Target::Cutoff, lfo2, LFO::Target::Cutoff);
-    EXPECT_EQ(routing.cutoff, lfo2.output());
+    EXPECT_EQ(routing.cutoff, &lfo2);
 }
 
 TEST(SubSynthRouting, EachTargetReachesItsInput) {

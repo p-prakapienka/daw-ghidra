@@ -124,7 +124,7 @@ void ADSR::SetMinSamples(uint attack, uint decay, uint release) {
     minReleaseSamples_ = release;
 }
 
-bool ADSR::IsDone(uint position) const {
+bool ADSR::IsDone(uint position) {
     return releaseSamples_ + kReleaseTailSamples < position;
 }
 

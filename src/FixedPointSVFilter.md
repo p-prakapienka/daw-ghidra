@@ -12,6 +12,35 @@ FixedPointSVFilter::ProcessCV(ControlVoltage*, int*, uint, int) 0x949a8  2728 by
 `SubSynth::SubSynth` constructs it with `true`, and `SubSynth::ProcessChannel`
 calls `ProcessCV` per voice.
 
+## The port
+
+This is the first class in `src/`, the tree that follows the original's
+structure: class names, signatures, member order and control flow. It
+replaces `components/StateVariableFilter`, which reproduced the same
+behaviour through an API of our own.
+
+| From the library | In `src/` |
+|---|---|
+| typeinfo: `FixedPointSVFilter` → `Filter` → `Machine` | `FixedPointSVFilter.h`, `Filter.h`, `Machine.h` |
+| `Machine`'s weak inlines and vtable order | `Machine.h`, with `m_pInput` at `+0x04` |
+| `Envelope`, the vtable with only `IsDone` and `GenerateValues` | `Envelope.h`; `ADSR` now derives from it |
+| `FixedPointSVFilter(bool)`, `ProcessCV(ControlVoltage*, int*, unsigned int, int)` | the same signatures |
+
+- **Member names.** The names are ours, in the engine's Hungarian style
+  (`m_n…`, `m_f…`, `m_an…`); only the offsets and types are the engine's.
+- **Public fields.** The members are public because `SubSynth` writes them
+  directly.
+- **Size check.** On a 32-bit build, `static_assert` checks the object is
+  `0x844` bytes.
+- **`UpdateCoefficients`** is the coefficient update the constructor ends
+  with. Each `ProcessCV` control block and both `SubSynth::OnChildModified`
+  filter branches repeat it. The library has no out-of-line function for it;
+  each of those places has the code inline. So here it is an inline member.
+- **`ProcessCV`** follows the original's shape. It loads the coefficients and
+  states, dispatches on the mode, and runs one loop per tap, each refreshing
+  the coefficients every 16 samples. It writes the states back on every path,
+  including the modes it does nothing for.
+
 ## Coefficient tables
 
 The constructor builds two 256-entry Q24 tables with `powf`, from the literals
@@ -28,19 +57,31 @@ damping runs 0.354 down to 0.022; with `false` it starts at unity.
 
 ## Layout
 
-| Offset | Meaning |
-| --- | --- |
-| 0x08 | mode: 1 low-pass, 2 high-pass, 3 band-pass, anything else passthrough |
-| 0x0C | cutoff table, 256 ints |
-| 0x40C | damping table, 256 ints |
-| 0x818 | input gain |
-| 0x81C, 0x820 | low and band state, first channel |
-| 0x824, 0x828 | low and band state, second channel |
-| 0x82C | resolved cutoff coefficient |
-| 0x830 | resolved damping coefficient |
-| 0x838, 0x83C | cutoff and resonance base, as floats |
-| 0x840 | invert the envelope |
-| 0x841 | the constructor's extended-resonance flag |
+| Offset | Member | Meaning |
+| --- | --- | --- |
+| 0x00 | vtable | `FixedPointSVFilter` |
+| 0x04 | `m_pInput` | `Machine`'s input, 0 |
+| 0x08 | `m_nMode` | 1 low-pass, 2 high-pass, 3 band-pass, anything else does nothing |
+| 0x0C | `m_anCutoffTable` | cutoff table, 256 ints |
+| 0x40C | `m_anDampingTable` | damping table, 256 ints |
+| 0x80C | `m_pModulation` | the cutoff's modulation source, an LFO (0 until `ConnectLFOs`) |
+| 0x810 | `m_DefaultEnvelope` | an embedded `Envelope`: always done, writes nothing |
+| 0x814 | `m_pEnvelope` | starts at `+0x810`; SubSynth points it at the voice's filter ADSR |
+| 0x818 | `m_nInputGain` | input gain, Q24 |
+| 0x81C, 0x820 | `m_anBand` | band integrator, first and second channel |
+| 0x824, 0x828 | `m_anLow` | low integrator, first and second channel |
+| 0x82C | `m_nCutoff` | resolved cutoff coefficient |
+| 0x830 | `m_nDamping` | resolved damping coefficient |
+| 0x834 | `m_n834` | zeroed by the constructor, not read by `ProcessCV` |
+| 0x838, 0x83C | `m_fCutoff`, `m_fResonance` | cutoff and resonance, as floats |
+| 0x840 | `m_bInvertEnvelope` | invert the envelope |
+| 0x841 | `m_bExtendedResonance` | the constructor's flag |
+
+**Correction:** an earlier version of this table had the states as "low and
+band, first channel" at `0x81C`/`0x820` and the same for the second channel
+at `0x824`/`0x828`. The loop at `0x94aa0` reads `0x81C` and `0x824` for the
+first channel: `0x81C` is updated as the band integrator and `0x824` as the
+low one. The second channel's band and low are at `0x820` and `0x828`.
 
 The object is `0x844` bytes, so every voice carries its own 2 KB copy of two
 identical tables.
@@ -100,7 +141,7 @@ e = value / 32767
 if (this[0x840]) e = 1 - e                                ; invert
 
 mod  = (*this[0x80C])[0x0C][sampleOffset]                  ; per-sample Q24 array
-lift = 1 + mod * 2^-24
+lift = 1 + mod * 0x33800001                                ; 1 / 16777215
 cutoff    = e * lift * (this[0x838] * cv[0x58])           ; base * keyboard tracking
 resonance = e * this[0x83C]                               ; the envelope scales this too
 
@@ -128,8 +169,7 @@ The **input gain is not a free parameter**. It is derived from resonance:
 `(1.25 - 0.75 * resonance)` otherwise, times full scale. For SubSynth the
 drive therefore falls from 1.0 at zero resonance to 0.325 at its slider's
 0.9 limit (0.25 at 1.0), which is what keeps the resonant peak in range.
-`setInputGain` remains for hosts that want to override it, but
-`updateControlBlock` sets it the engine's way.
+The port has no way to set the gain directly; it is always the engine's.
 
 **Correction:** an earlier version of this note and of the component had the
 two bases the other way round. Every site loads 1.25 and replaces it with 1.0
@@ -146,9 +186,7 @@ So SubSynth's filters were driven 0.25 of full scale too hard.
 The constructor ends the same way (`0x948a4`–`0x9494c`). It sets the cutoff
 base to 1.0 and the resonance base to 0.0, then resolves them without an
 envelope: cutoff entry 255, damping entry 0, and the input gain for zero
-resonance. The component now does the same. Before, it started at cutoff
-entry 0 and a gain of exactly full scale, which only mattered for a filter
-processed before its first control block or `setCutoff`.
+resonance. The port does the same.
 
 And the envelope scales **both** cutoff and resonance. That is unusual, but
 `vmul.f32 s15, s15, s12` at `0x94ca8` is unambiguous: the same `e` that scaled
@@ -160,37 +198,36 @@ The envelope is called through a vtable whose slot 0 is `IsDone` and slot 1 is
 envelope (SubSynth `+0x3068 + 0x64·voice`), not to this one. The filter's
 `+0x814` defaults to an embedded null envelope at `+0x810` and SubSynth points
 it at the voice's filter ADSR (SubSynth `+0xBBA8 + 0x64·voice`). When the voice
-ends, `ProcessChannel` zeroes `+0x81C`–`+0x828`, the four integrator states,
-which is `reset()`.
+ends, `ProcessChannel` zeroes `+0x81C`–`+0x828`, the four integrator states;
+`SubSynthVoice` writes the four members the same way.
 
 The per-sample array at `+0x80C` is a modulation source, not the control
 voltage. `SubSynth::ConnectLFOs` points every modulation input — the two
 oscillators' fields and each voice filter's `+0x80C` — at a default source, then
 rewires one input per LFO according to the LFO target. So `+0x80C` is an LFO
 output when an LFO targets the filter, and the default source otherwise.
+That default source is an LFO at SubSynth `+0x36A8` that nothing ever runs,
+so its output stays zero. `SubSynthVoice::Shared::defaultSource` plays that
+part here, and the filter always has a source.
+
+**Correction:** the modulation scale is the literal `0x33800001`
+(`0x94dcc`), the float nearest `1 / 16777215`, as in the oscillator. The
+earlier component used exactly `2^-24`. The two differ by one ulp, which can
+move the cutoff index across a table step.
 
 `ProcessCV` dispatches on the mode first (`0x94a10`–`0x94a4c`). Any mode other
 than 1–3 writes the four integrator states back unchanged and returns, so no
 control block runs: the buffer, the input gain and both coefficients are left
-as they were. **Correction:** `processVoice` used to run the control blocks
-for mode 0 and unknown modes too, updating the gain and coefficients. The
-difference showed up when the original `ProcessCV` was run against
-`processVoice` on the same inputs.
+as they were.
 
-`updateControlBlock` and `processVoice` implement all of this. The remaining
-untested claim is that the default source reads as zeros; this component treats
-a null modulation pointer that way.
+## Checked against the original
 
-## Measured response
+Both checks compare against the 3.2.0 (beta 7) armv7 library, bit for bit:
 
-Cutoff 0.5, resonance 0.2, RMS of a filtered sine relative to full scale:
-
-```
-           100 Hz   500 Hz   2 kHz    8 kHz
-low-pass   0.683    0.801    0.378    0.018
-high-pass  0.027    0.132    1.033    0.714
-band-pass  0.492    0.637    0.585    0.095
-```
-
-The reconstruction is behaviourally faithful, not proven bit-exact: it has not
-been compared sample-for-sample against the engine.
+- **The constructor:** both tables and the resolved state, for both flag
+  values.
+- **`ProcessCV`, 81 scenarios:** every mode, plus mode 0 and an unknown mode;
+  cutoff and resonance in and past their ranges; inversion; gate open and
+  closed; key tracking; mono and stereo; modulation. The original runs with
+  its own `ADSR`.
+- **Inside SubSynth,** the 28 whole-machine scenarios in `SubSynthVoice.md`.
