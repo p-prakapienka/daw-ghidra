@@ -134,6 +134,11 @@ Consequences:
 `ControlVoltage::noteOn` is equivalent to the mono, non-sliding, non-stealing
 case.
 
+Slides, the glide length and the sustain pedal are checked against the
+original through `SubSynth::Process` (`SubSynthVoice.md`). Only key releases
+through `PreviewKeyOff` reach the sustain list: sequencer note-offs
+(`OnSequencerKeyEvent`) are never held back by the pedal.
+
 ## Note frequencies
 
 `GetFrequencyFromNoteId` indexes a 128-float table at `.bss` `0x349cc8`
