@@ -96,8 +96,9 @@ public:
 
         SubSynthRouting routing;
 
-        // SubSynth +0x36A8: the default modulation source, an LFO left
-        // switched off. Its output stays zero; inputs nothing aims at read it.
+        // SubSynth +0x36A8: the default modulation source. SubSynth's
+        // constructor sets it to LFO::kOff with no depth and generates one
+        // block of zeros; inputs that nothing aims at read it.
         LFO defaultSource;
 
         // The control handlers: SetOscillatorMix and the "Osc2 Waveform" and

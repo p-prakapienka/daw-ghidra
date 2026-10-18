@@ -14,7 +14,7 @@ constexpr int kOne24 = 0x00FFFFFF;
 
 // Aim one LFO at its target, the body of one ConnectLFOs switch.
 void aim(SubSynthRouting &routing, LFO &lfo, LFO::Target target) {
-    const int *source = lfo.output();
+    const int *source = lfo.m_pnOutput;
     LFO *const object = &lfo;
     switch (target) {
     case LFO::Target::Oscillator1Pitch: routing.oscillator1.vibrato = source; break;
@@ -34,7 +34,7 @@ void aim(SubSynthRouting &routing, LFO &lfo, LFO::Target target) {
         // offset alone.
         return;
     }
-    lfo.setPhaseOffset(target == LFO::Target::Oscillator2Octave ? LFO::kHalfCycle : 0);
+    lfo.m_nPhaseOffset = target == LFO::Target::Oscillator2Octave ? LFO::kHalfCycle : 0;
 }
 
 } // namespace

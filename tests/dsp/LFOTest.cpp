@@ -9,20 +9,21 @@ namespace {
 
 std::vector<int> renderCycle(LFO &lfo) {
     std::vector<int> samples;
-    for (unsigned int position = 0; position < lfo.periodSamples(); position += LFO::kBlockSize) {
-        lfo.generate(position, LFO::kBlockSize);
-        samples.insert(samples.end(), lfo.output(), lfo.output() + LFO::kBlockSize);
+    for (unsigned int position = 0; position < lfo.m_nPeriod; position += LFO::kBlockSize) {
+        lfo.m_nSongPosition = position;
+        lfo.GenerateInternal(LFO::kBlockSize);
+        samples.insert(samples.end(), lfo.m_pnOutput, lfo.m_pnOutput + LFO::kBlockSize);
     }
-    samples.resize(lfo.periodSamples());
+    samples.resize(lfo.m_nPeriod);
     return samples;
 }
 
-LFO makeLFO(LFO::Waveform waveform) {
-    LFO lfo;
-    lfo.setRate(9.0f); // four cycles per beat
+// An LFO owns its output block and cannot be copied, so the helper sets one
+// up in place.
+void setUp(LFO &lfo, int waveform) {
+    lfo.m_fRate = 9.0f; // four cycles per beat
     lfo.SetBPM(120.0f);
-    lfo.setWaveform(waveform);
-    return lfo;
+    lfo.m_nWaveform = waveform;
 }
 
 double fraction(int value) { return static_cast<double>(value) / LFO::kUnity; }
@@ -31,34 +32,35 @@ double fraction(int value) { return static_cast<double>(value) / LFO::kUnity; }
 
 TEST(LFORate, PeriodIsBeatLengthOverCyclesPerBeat) {
     LFO lfo;
-    lfo.setRate(5.0f); // one cycle per beat
+    lfo.m_fRate = 5.0f; // one cycle per beat
     lfo.SetBPM(120.0f);
-    EXPECT_EQ(lfo.periodSamples(), 22050u);
+    EXPECT_EQ(lfo.m_nPeriod, 22050u);
 
-    lfo.setRate(9.0f); // four per beat
+    lfo.m_fRate = 9.0f; // four per beat
     lfo.OnParamModified();
-    EXPECT_EQ(lfo.periodSamples(), 5512u);
+    EXPECT_EQ(lfo.m_nPeriod, 5512u);
 
-    lfo.setRate(0.0f); // one per sixteen beats
+    lfo.m_fRate = 0.0f; // one per sixteen beats
     lfo.OnParamModified();
-    EXPECT_EQ(lfo.periodSamples(), 352800u);
+    EXPECT_EQ(lfo.m_nPeriod, 352800u);
 }
 
 TEST(LFORate, IndicesPastTheTableUseOneCyclePerBeat) {
     LFO lfo;
-    lfo.setRate(40.0f);
+    lfo.m_fRate = 40.0f;
     lfo.SetBPM(120.0f);
-    EXPECT_EQ(lfo.periodSamples(), 22050u);
+    EXPECT_EQ(lfo.m_nPeriod, 22050u);
 }
 
 TEST(LFORate, DefaultsToOneCyclePerEightBeatsAt120) {
     // The constructor leaves rate 1.0, which indexes 0.125.
     const LFO lfo;
-    EXPECT_EQ(lfo.periodSamples(), 176400u);
+    EXPECT_EQ(lfo.m_nPeriod, 176400u);
 }
 
 TEST(LFOShapes, SineSpansFullScaleAndStartsRising) {
-    LFO lfo = makeLFO(LFO::Waveform::Sine);
+    LFO lfo;
+    setUp(lfo, LFO::kSine);
     const auto samples = renderCycle(lfo);
 
     EXPECT_NEAR(fraction(samples.front()), 0.0, 0.01);
@@ -68,7 +70,8 @@ TEST(LFOShapes, SineSpansFullScaleAndStartsRising) {
 }
 
 TEST(LFOShapes, TriangleStartsAtTheTop) {
-    LFO lfo = makeLFO(LFO::Waveform::Triangle);
+    LFO lfo;
+    setUp(lfo, LFO::kTriangle);
     const auto samples = renderCycle(lfo);
 
     EXPECT_NEAR(fraction(samples.front()), 1.0, 0.01);
@@ -76,7 +79,8 @@ TEST(LFOShapes, TriangleStartsAtTheTop) {
 }
 
 TEST(LFOShapes, SawtoothFallsAndIsSmoothedAtTheReset) {
-    LFO lfo = makeLFO(LFO::Waveform::Sawtooth);
+    LFO lfo;
+    setUp(lfo, LFO::kSawtooth);
     const auto samples = renderCycle(lfo);
 
     // A one-pole at 0.99 lags a ramp by about 99 samples, which on a
@@ -91,7 +95,8 @@ TEST(LFOShapes, SawtoothFallsAndIsSmoothedAtTheReset) {
 }
 
 TEST(LFOShapes, SquareIsHighInTheMiddleHalf) {
-    LFO lfo = makeLFO(LFO::Waveform::Square);
+    LFO lfo;
+    setUp(lfo, LFO::kSquare);
     const auto samples = renderCycle(lfo);
 
     EXPECT_LT(fraction(samples[samples.size() / 8]), -0.9);
@@ -100,47 +105,60 @@ TEST(LFOShapes, SquareIsHighInTheMiddleHalf) {
 }
 
 TEST(LFODepth, ScalesTheOutput) {
-    LFO lfo = makeLFO(LFO::Waveform::Sine);
-    lfo.setDepth(0.25f);
+    LFO lfo;
+    setUp(lfo, LFO::kSine);
+    lfo.m_nDepth = static_cast<int>(0.25f * 16777215.0f);
     const auto samples = renderCycle(lfo);
 
     EXPECT_NEAR(fraction(*std::max_element(samples.begin(), samples.end())), 0.25, 0.002);
 }
 
 TEST(LFOSync, IsPhaseLockedToTheSongPosition) {
-    LFO lfo = makeLFO(LFO::Waveform::Sine);
+    LFO lfo;
+    setUp(lfo, LFO::kSine);
 
-    lfo.generate(1000, 128);
-    const std::vector<int> first(lfo.output(), lfo.output() + 128);
+    lfo.m_nSongPosition = 1000;
+    lfo.GenerateInternal(128);
+    const std::vector<int> first(lfo.m_pnOutput, lfo.m_pnOutput + 128);
 
-    lfo.generate(40000, 128);
-    lfo.generate(1000, 128);
-    const std::vector<int> again(lfo.output(), lfo.output() + 128);
+    lfo.m_nSongPosition = 40000;
+    lfo.GenerateInternal(128);
+    lfo.m_nSongPosition = 1000;
+    lfo.GenerateInternal(128);
+    const std::vector<int> again(lfo.m_pnOutput, lfo.m_pnOutput + 128);
 
     EXPECT_EQ(first, again);
 }
 
 TEST(LFOSync, PhaseOffsetShiftsTheCycle) {
-    LFO plain = makeLFO(LFO::Waveform::Sine);
-    LFO shifted = makeLFO(LFO::Waveform::Sine);
-    shifted.setPhaseOffset(LFO::kHalfCycle);
+    LFO plain;
+    setUp(plain, LFO::kSine);
+    LFO shifted;
+    setUp(shifted, LFO::kSine);
+    shifted.m_nPhaseOffset = LFO::kHalfCycle;
 
-    plain.generate(0, 1);
-    shifted.generate(0, 1);
+    plain.m_nSongPosition = 0;
+    plain.GenerateInternal(1);
+    shifted.m_nSongPosition = 0;
+    shifted.GenerateInternal(1);
 
     // Half a cycle later a rising zero crossing becomes a falling one; both
     // sit near zero, with opposite slopes. Compare a quarter in.
-    const unsigned int quarter = plain.periodSamples() / 4;
-    plain.generate(quarter, 1);
-    shifted.generate(quarter, 1);
-    EXPECT_NEAR(fraction(plain.output()[0]), 1.0, 0.01);
-    EXPECT_NEAR(fraction(shifted.output()[0]), -1.0, 0.01);
+    const unsigned int quarter = plain.m_nPeriod / 4;
+    plain.m_nSongPosition = quarter;
+    plain.GenerateInternal(1);
+    shifted.m_nSongPosition = quarter;
+    shifted.GenerateInternal(1);
+    EXPECT_NEAR(fraction(plain.m_pnOutput[0]), 1.0, 0.01);
+    EXPECT_NEAR(fraction(shifted.m_pnOutput[0]), -1.0, 0.01);
 }
 
 TEST(LFOOff, WritesZeros) {
-    LFO lfo = makeLFO(LFO::Waveform::Off);
-    lfo.generate(0, 128);
+    LFO lfo;
+    setUp(lfo, LFO::kOff);
+    lfo.m_nSongPosition = 0;
+    lfo.GenerateInternal(128);
     for (unsigned int index = 0; index < 128; ++index) {
-        EXPECT_EQ(lfo.output()[index], 0);
+        EXPECT_EQ(lfo.m_pnOutput[index], 0);
     }
 }

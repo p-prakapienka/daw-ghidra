@@ -206,8 +206,9 @@ voltage. `SubSynth::ConnectLFOs` points every modulation input — the two
 oscillators' fields and each voice filter's `+0x80C` — at a default source, then
 rewires one input per LFO according to the LFO target. So `+0x80C` is an LFO
 output when an LFO targets the filter, and the default source otherwise.
-That default source is an LFO at SubSynth `+0x36A8` that nothing ever runs,
-so its output stays zero. `SubSynthVoice::Shared::defaultSource` plays that
+That default source is an LFO at SubSynth `+0x36A8`. SubSynth's constructor
+gives it the "off" waveform and no depth and generates one block, so its
+output is zero. `SubSynthVoice::Shared::defaultSource` plays that
 part here, and the filter always has a source.
 
 **Correction:** the modulation scale is the literal `0x33800001`
