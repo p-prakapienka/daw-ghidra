@@ -17,10 +17,10 @@ constexpr int kFullScale = 16777215;
 
 ADSR sustainedEnvelope(float sustain) {
     ADSR envelope;
-    envelope.setAttackSeconds(0.0f);
-    envelope.setDecaySeconds(0.0f);
-    envelope.setSustainLevel(sustain);
-    envelope.setReleaseSeconds(0.1f);
+    envelope.m_fAttack = 0.0f;
+    envelope.m_fDecay = 0.0f;
+    envelope.m_fSustain = sustain;
+    envelope.m_fRelease = 0.1f;
     envelope.OnParamModified();
     return envelope;
 }

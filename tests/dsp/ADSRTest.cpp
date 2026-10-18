@@ -11,15 +11,15 @@ constexpr float kDecaySeconds = 0.10f;
 constexpr float kReleaseSeconds = 0.10f;
 constexpr float kSustain = 0.5f;
 
-ADSR makeEnvelope(ADSR::Curve curve) {
+ADSR makeEnvelope(int curve) {
     ADSR envelope;
-    envelope.setAttackSeconds(kAttackSeconds);
-    envelope.setDecaySeconds(kDecaySeconds);
-    envelope.setSustainLevel(kSustain);
-    envelope.setReleaseSeconds(kReleaseSeconds);
-    envelope.setAttackCurve(curve);
-    envelope.setDecayCurve(curve);
-    envelope.setReleaseCurve(curve);
+    envelope.m_fAttack = kAttackSeconds;
+    envelope.m_fDecay = kDecaySeconds;
+    envelope.m_fSustain = kSustain;
+    envelope.m_fRelease = kReleaseSeconds;
+    envelope.m_nAttackCurve = curve;
+    envelope.m_nDecayCurve = curve;
+    envelope.m_nReleaseCurve = curve;
     envelope.OnParamModified();
     return envelope;
 }
@@ -40,28 +40,28 @@ std::vector<short> release(ADSR &envelope, unsigned int numSamples) {
 
 // Seconds are converted with the rate the engine hardcodes, not the host rate.
 TEST(ADSRParameters, ConvertsSecondsAtTheHardcodedRate) {
-    const ADSR envelope = makeEnvelope(ADSR::Curve::Linear);
+    const ADSR envelope = makeEnvelope(ADSR::kLinear);
 
-    EXPECT_EQ(envelope.attackSamples(), 2205u);
-    EXPECT_EQ(envelope.decaySamples(), 4410u);
-    EXPECT_EQ(envelope.releaseSamples(), 4410u);
-    EXPECT_EQ(envelope.sustainQ15(), 16383);
+    EXPECT_EQ(envelope.m_nAttackSamples, 2205u);
+    EXPECT_EQ(envelope.m_nDecaySamples, 4410u);
+    EXPECT_EQ(envelope.m_nReleaseSamples, 4410u);
+    EXPECT_EQ(envelope.m_sSustain, 16383);
 }
 
 TEST(ADSRParameters, ClampsSegmentsToTheEngineRange) {
     ADSR envelope;
-    envelope.setAttackSeconds(0.0f);
-    envelope.setDecaySeconds(600.0f);
-    envelope.setReleaseSeconds(-1.0f);
+    envelope.m_fAttack = 0.0f;
+    envelope.m_fDecay = 600.0f;
+    envelope.m_fRelease = -1.0f;
     envelope.OnParamModified();
 
-    EXPECT_EQ(envelope.attackSamples(), ADSR::kDefaultMinSegmentSamples);
-    EXPECT_EQ(envelope.decaySamples(), ADSR::kMaxSegmentSamples);
+    EXPECT_EQ(envelope.m_nAttackSamples, 80u);
+    EXPECT_EQ(envelope.m_nDecaySamples, 220500u);
 
     // A negative time is not clamped to the minimum: the engine converts to a
     // signed int, stores it in an unsigned field, and the wrapped value trips
     // the upper bound instead.
-    EXPECT_EQ(envelope.releaseSamples(), ADSR::kMaxSegmentSamples);
+    EXPECT_EQ(envelope.m_nReleaseSamples, 220500u);
 }
 
 TEST(ADSRParameters, HonoursConfiguredMinimums) {
@@ -69,31 +69,31 @@ TEST(ADSRParameters, HonoursConfiguredMinimums) {
     envelope.SetMinSamples(1000, 2000, 3000);
     envelope.OnParamModified();
 
-    EXPECT_EQ(envelope.attackSamples(), 1000u);
-    EXPECT_EQ(envelope.decaySamples(), 2000u);
-    EXPECT_EQ(envelope.releaseSamples(), 3000u);
+    EXPECT_EQ(envelope.m_nAttackSamples, 1000u);
+    EXPECT_EQ(envelope.m_nDecaySamples, 2000u);
+    EXPECT_EQ(envelope.m_nReleaseSamples, 3000u);
 }
 
 // The measured shape of each segment. These are the values the reconstruction
 // produces today, so a change to the fixed-point maths has to be deliberate.
 TEST(ADSRShape, LinearRisesAndFallsEvenly) {
-    ADSR envelope = makeEnvelope(ADSR::Curve::Linear);
-    const auto attack = envelope.attackSamples();
-    const auto decay = envelope.decaySamples();
+    ADSR envelope = makeEnvelope(ADSR::kLinear);
+    const auto attack = envelope.m_nAttackSamples;
+    const auto decay = envelope.m_nDecaySamples;
     const auto values = hold(envelope, attack + decay + 2000);
 
     EXPECT_EQ(values[0], 0);
     EXPECT_EQ(values[attack / 2], 16374);
     EXPECT_EQ(values[attack - 1], 32749);
     EXPECT_EQ(values[attack + decay / 2], 24575);
-    EXPECT_EQ(values[attack + decay], envelope.sustainQ15());
-    EXPECT_EQ(values.back(), envelope.sustainQ15());
+    EXPECT_EQ(values[attack + decay], envelope.m_sSustain);
+    EXPECT_EQ(values.back(), envelope.m_sSustain);
 }
 
 TEST(ADSRShape, ExponentialRisesSlowly) {
-    ADSR envelope = makeEnvelope(ADSR::Curve::Exponential);
-    const auto attack = envelope.attackSamples();
-    const auto values = hold(envelope, attack + envelope.decaySamples());
+    ADSR envelope = makeEnvelope(ADSR::kExponential);
+    const auto attack = envelope.m_nAttackSamples;
+    const auto values = hold(envelope, attack + envelope.m_nDecaySamples);
 
     // A squared ramp is at a quarter of full scale halfway through.
     EXPECT_EQ(values[attack / 2], 8182);
@@ -101,9 +101,9 @@ TEST(ADSRShape, ExponentialRisesSlowly) {
 }
 
 TEST(ADSRShape, LogarithmicRisesQuickly) {
-    ADSR envelope = makeEnvelope(ADSR::Curve::Logarithmic);
-    const auto attack = envelope.attackSamples();
-    const auto values = hold(envelope, attack + envelope.decaySamples());
+    ADSR envelope = makeEnvelope(ADSR::kLogarithmic);
+    const auto attack = envelope.m_nAttackSamples;
+    const auto values = hold(envelope, attack + envelope.m_nDecaySamples);
 
     EXPECT_EQ(values[attack / 2], 25195);
 
@@ -112,31 +112,31 @@ TEST(ADSRShape, LogarithmicRisesQuickly) {
 }
 
 TEST(ADSRRelease, FallsFromTheLevelHeldAtNoteOff) {
-    ADSR envelope = makeEnvelope(ADSR::Curve::Linear);
-    const auto attack = envelope.attackSamples();
-    const auto decay = envelope.decaySamples();
+    ADSR envelope = makeEnvelope(ADSR::kLinear);
+    const auto attack = envelope.m_nAttackSamples;
+    const auto decay = envelope.m_nDecaySamples;
     hold(envelope, attack + decay + 1000);
 
-    const auto releaseLength = envelope.releaseSamples();
+    const auto releaseLength = envelope.m_nReleaseSamples;
     const auto values = release(envelope, releaseLength + 1000);
 
     EXPECT_EQ(values[0], 16382);
     EXPECT_EQ(values[releaseLength / 2], 8191);
     EXPECT_EQ(values[releaseLength + 10], 0);
-    EXPECT_TRUE(envelope.isIdle());
+    EXPECT_TRUE(envelope.m_bIdle);
 }
 
 TEST(ADSRRelease, ReportsDoneAfterTheTail) {
-    ADSR envelope = makeEnvelope(ADSR::Curve::Linear);
-    const auto releaseLength = envelope.releaseSamples();
+    ADSR envelope = makeEnvelope(ADSR::kLinear);
+    const auto releaseLength = envelope.m_nReleaseSamples;
 
     EXPECT_FALSE(envelope.IsDone(releaseLength));
-    EXPECT_FALSE(envelope.IsDone(releaseLength + ADSR::kReleaseTailSamples));
-    EXPECT_TRUE(envelope.IsDone(releaseLength + ADSR::kReleaseTailSamples + 1));
+    EXPECT_FALSE(envelope.IsDone(releaseLength + 0x800u));
+    EXPECT_TRUE(envelope.IsDone(releaseLength + 0x800u + 1));
 }
 
 TEST(ADSRRelease, IdleEnvelopeWritesSilence) {
-    ADSR envelope = makeEnvelope(ADSR::Curve::Linear);
+    ADSR envelope = makeEnvelope(ADSR::kLinear);
     const auto values = release(envelope, 64);
 
     for (const short value : values) {
@@ -147,11 +147,11 @@ TEST(ADSRRelease, IdleEnvelopeWritesSilence) {
 // Retriggering mid-release has to start from the level already sounding,
 // otherwise the jump to zero clicks.
 TEST(ADSRRetrigger, FadesInFromTheLevelStillSounding) {
-    ADSR envelope = makeEnvelope(ADSR::Curve::Linear);
-    hold(envelope, envelope.attackSamples() + envelope.decaySamples() + 1000);
+    ADSR envelope = makeEnvelope(ADSR::kLinear);
+    hold(envelope, envelope.m_nAttackSamples + envelope.m_nDecaySamples + 1000);
     const auto releasing = release(envelope, 500);
 
-    const auto values = hold(envelope, ADSR::kRetriggerFadeSamples);
+    const auto values = hold(envelope, 32u);
 
     EXPECT_EQ(values[0], releasing.back());
     EXPECT_LT(values[1], values[0]);
@@ -159,8 +159,8 @@ TEST(ADSRRetrigger, FadesInFromTheLevelStillSounding) {
 }
 
 TEST(ADSRRetrigger, StartFromCurrentLevelSkipsTheRestart) {
-    ADSR envelope = makeEnvelope(ADSR::Curve::Linear);
-    envelope.setStartFromCurrentLevel(true);
+    ADSR envelope = makeEnvelope(ADSR::kLinear);
+    envelope.m_bStartFromCurrent = true;
     std::vector<short> values(8000);
     envelope.GenerateValues(0, 1, values.data(), 8000);
     const short sustained = values.back();
@@ -183,10 +183,10 @@ TEST(ADSRRetrigger, StartFromCurrentLevelSkipsTheRestart) {
 TEST(ADSRSustain, PlateauFollowsTheCurrentSustain) {
     // The sustain plateau is written from the live sustain (0x54), so a
     // change takes effect mid-note; the decay's floor stays latched.
-    ADSR envelope = makeEnvelope(ADSR::Curve::Linear);
+    ADSR envelope = makeEnvelope(ADSR::kLinear);
     std::vector<short> values(8000);
     envelope.GenerateValues(0, 1, values.data(), 8000);
-    envelope.setSustainLevel(0.25f);
+    envelope.m_fSustain = 0.25f;
     envelope.OnParamModified();
     std::vector<short> more(16);
     envelope.GenerateValues(8000, 1, more.data(), 16);

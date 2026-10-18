@@ -91,315 +91,310 @@ inline int fadeFrom(int previous, int shaped, uint position, uint fadeLength) {
 
 } // namespace
 
+// 0x806fc: the parameters, curves and minimums below, the vtable, and a
+// final OnParamModified. Fields it does not write are zeroed here.
 ADSR::ADSR() {
     OnParamModified();
 }
 
 void ADSR::OnParamModified() {
-    const auto resolve = [](float seconds, uint minimum) {
+    const auto resolve = [](float seconds, unsigned int minimum) {
         // The engine converts with vcvt.s32.f32 and stores the result in an
         // unsigned field, so a negative time wraps to a very large value and is
         // then clamped to the maximum rather than the minimum.
-        const auto samples = static_cast<uint>(toInt(seconds * ADSR::kSampleRate));
+        const auto samples = static_cast<unsigned int>(toInt(seconds * 44100.0f));
         if (samples < minimum) {
             return minimum;
         }
-        if (samples > ADSR::kMaxSegmentSamples) {
-            return ADSR::kMaxSegmentSamples;
+        if (samples > 220500u) {
+            return 220500u;
         }
         return samples;
     };
 
-    attackSamples_ = resolve(attackSeconds_, minAttackSamples_);
-    decaySamples_ = resolve(decaySeconds_, minDecaySamples_);
-    releaseSamples_ = resolve(releaseSeconds_, minReleaseSamples_);
+    m_nAttackSamples = resolve(m_fAttack, m_nMinAttackSamples);
+    m_nDecaySamples = resolve(m_fDecay, m_nMinDecaySamples);
+    m_nReleaseSamples = resolve(m_fRelease, m_nMinReleaseSamples);
     // vcvt.s32.f32, then strh: the low 16 bits of the clamped integer. The
     // amplitude envelopes' constructor sustain of 16777215.0 lands on 0xFFFF.
-    sustainQ15_ = static_cast<short>(toInt(sustainLevel_ * 32767.0f));
+    m_sSustain = static_cast<short>(toInt(m_fSustain * 32767.0f));
 }
 
-void ADSR::SetMinSamples(uint attack, uint decay, uint release) {
-    minAttackSamples_ = attack;
-    minDecaySamples_ = decay;
-    minReleaseSamples_ = release;
+void ADSR::SetMinSamples(unsigned int attack, unsigned int decay, unsigned int release) {
+    m_nMinAttackSamples = attack;
+    m_nMinDecaySamples = decay;
+    m_nMinReleaseSamples = release;
 }
 
-bool ADSR::IsDone(uint position) {
-    return releaseSamples_ + kReleaseTailSamples < position;
+bool ADSR::IsDone(unsigned int position) {
+    return m_nReleaseSamples + 0x800 < position;
 }
 
 
-// GenerateValues dispatches on the gate. The engine has no early return for an
-// empty block: the latching below still runs, and only the closing read of the
-// last written sample is skipped here (the engine reads the halfword before
-// the buffer).
-void ADSR::GenerateValues(uint position, uint gate, short *output, uint numSamples) {
+// One function, as in the engine (3428 bytes): the gate selects the release
+// path or the held path. The engine has no early return for an empty block:
+// the latching still runs, and only the closing read of the last written
+// sample is skipped here (the engine reads the halfword before the buffer).
+void ADSR::GenerateValues(unsigned int position, unsigned int gate, short *output,
+                          unsigned int numSamples) {
     if (gate == 0) {
-        generateRelease(position, output, numSamples);
-    } else {
-        generateHeld(position, output, numSamples);
-    }
-}
-
-void ADSR::generateRelease(uint position, short *output, uint numSamples) {
-    if (idle_) {
-        std::memset(output, 0, numSamples * sizeof(short));
-        return;
-    }
-
-    if (noteHeld_) {
-        // Note-off: latch the release length and the level to fall from.
-        heldReleaseSamples_ = releaseSamples_;
-        releaseStartLevel_ = lastOutput_;
-        releaseStep_ = stepFor(heldReleaseSamples_);
-    }
-    noteHeld_ = false;
-
-    const int level = releaseStartLevel_;
-    uint remaining = numSamples;
-    short *out = output;
-
-    if (position < heldReleaseSamples_) {
-        int ramp = kRampStart - releaseStep_ * static_cast<int>(position);
-        uint left = heldReleaseSamples_ - position;
-        switch (releaseCurve_) {
-        case Curve::Linear:
-            while (left != 0 && remaining != 0) {
-                const int s = (static_cast<uint>(ramp) >> 9) & 0xFFFF;
-                *out++ = static_cast<short>(floorAtZero(high15(mulLow(s, level))));
-                ramp -= releaseStep_;
-                --left;
-                --remaining;
-            }
-            break;
-        case Curve::Logarithmic:
-            while (left != 0 && remaining != 0) {
-                const int s = (static_cast<uint>(ramp) >> 10) & 0xFFFF;
-                const int shaped = logShape(s) << 1;
-                *out++ = static_cast<short>(floorAtZero(high15(mulLow(shaped, level))));
-                ramp -= releaseStep_;
-                --left;
-                --remaining;
-            }
-            break;
-        case Curve::Exponential:
-            while (left != 0 && remaining != 0) {
-                const int s = (static_cast<uint>(ramp) >> 9) & 0xFFFF;
-                *out++ = static_cast<short>(floorAtZero(high15(mulLow(expShape(s), level))));
-                ramp -= releaseStep_;
-                --left;
-                --remaining;
-            }
-            break;
+        if (m_bIdle) {
+            std::memset(output, 0, numSamples * sizeof(short));
+            return;
         }
-    }
 
-    if (remaining == 0) {
-        if (out != output) {
-            lastOutput_ = out[-1];
+        if (m_bHeld) {
+            // Note-off: latch the release length and the level to fall from.
+            m_nNoteReleaseSamples = m_nReleaseSamples;
+            m_sReleaseStart = m_sLast;
+            m_nReleaseStep = stepFor(m_nNoteReleaseSamples);
         }
-        return;
-    }
-    std::memset(out, 0, remaining * sizeof(short));
-    lastOutput_ = 0;
-    idle_ = true;
-}
+        m_bHeld = false;
 
-void ADSR::generateHeld(uint position, short *output, uint numSamples) {
-    uint attackLength;
-    uint decayLength;
-    int start;
-    int span;
+        const int level = m_sReleaseStart;
+        uint remaining = numSamples;
+        short *out = output;
 
-    if (!startFromCurrentLevel_ && lastPosition_ > position) {
-        // The position jumped backwards: a retrigger, always from zero.
-        lastPosition_ = position;
-        start = 0;
-        span = 0x7FFF;
-        attackLength = attackSamples_;
-        decayLength = decaySamples_;
-        heldAttackSamples_ = attackLength;
-        heldDecaySamples_ = decayLength;
-        previousLevel_ = lastOutput_;
-        attackStep_ = stepFor(attackLength);
-        decayStep_ = stepFor(decayLength);
-        heldSustainQ15_ = sustainQ15_;
-        attackStartLevel_ = 0;
-        idle_ = false;
-    } else {
-        lastPosition_ = position;
-        if (!noteHeld_) {
-            // A new note. With the 0x61 byte set it rises from the last level.
-            attackLength = attackSamples_;
-            decayLength = decaySamples_;
-            heldAttackSamples_ = attackLength;
-            heldDecaySamples_ = decayLength;
-            previousLevel_ = lastOutput_;
-            if (startFromCurrentLevel_) {
-                start = lastOutput_;
-                span = static_cast<ushort>(0x7FFF - static_cast<ushort>(lastOutput_));
-            } else {
-                start = 0;
-                span = 0x7FFF;
+        if (position < m_nNoteReleaseSamples) {
+            int ramp = kRampStart - m_nReleaseStep * static_cast<int>(position);
+            uint left = m_nNoteReleaseSamples - position;
+            switch (m_nReleaseCurve) {
+            case kLinear:
+                while (left != 0 && remaining != 0) {
+                    const int s = (static_cast<uint>(ramp) >> 9) & 0xFFFF;
+                    *out++ = static_cast<short>(floorAtZero(high15(mulLow(s, level))));
+                    ramp -= m_nReleaseStep;
+                    --left;
+                    --remaining;
+                }
+                break;
+            case kLogarithmic:
+                while (left != 0 && remaining != 0) {
+                    const int s = (static_cast<uint>(ramp) >> 10) & 0xFFFF;
+                    const int shaped = logShape(s) << 1;
+                    *out++ = static_cast<short>(floorAtZero(high15(mulLow(shaped, level))));
+                    ramp -= m_nReleaseStep;
+                    --left;
+                    --remaining;
+                }
+                break;
+            case kExponential:
+                while (left != 0 && remaining != 0) {
+                    const int s = (static_cast<uint>(ramp) >> 9) & 0xFFFF;
+                    *out++ = static_cast<short>(floorAtZero(high15(mulLow(expShape(s), level))));
+                    ramp -= m_nReleaseStep;
+                    --left;
+                    --remaining;
+                }
+                break;
             }
-            attackStep_ = stepFor(attackLength);
-            decayStep_ = stepFor(decayLength);
-            heldSustainQ15_ = sustainQ15_;
-            attackStartLevel_ = static_cast<short>(start);
-            idle_ = false;
+        }
+
+        if (remaining == 0) {
+            if (out != output) {
+                m_sLast = out[-1];
+            }
+            return;
+        }
+        std::memset(out, 0, remaining * sizeof(short));
+        m_sLast = 0;
+        m_bIdle = true;
+    } else {
+        uint attackLength;
+        uint decayLength;
+        int start;
+        int span;
+
+        if (!m_bStartFromCurrent && m_nLastPosition > position) {
+            // The position jumped backwards: a retrigger, always from zero.
+            m_nLastPosition = position;
+            start = 0;
+            span = 0x7FFF;
+            attackLength = m_nAttackSamples;
+            decayLength = m_nDecaySamples;
+            m_nNoteAttackSamples = attackLength;
+            m_nNoteDecaySamples = decayLength;
+            m_sPrevious = m_sLast;
+            m_nAttackStep = stepFor(attackLength);
+            m_nDecayStep = stepFor(decayLength);
+            m_sNoteSustain = m_sSustain;
+            m_sAttackStart = 0;
+            m_bIdle = false;
         } else {
-            start = attackStartLevel_;
-            span = static_cast<ushort>(0x7FFF - static_cast<ushort>(attackStartLevel_));
-            attackLength = heldAttackSamples_;
-            decayLength = heldDecaySamples_;
-        }
-    }
-    noteHeld_ = true;
-
-    // Sustain fills and the decay's span use the current sustain (0x54); the
-    // decay's floor uses the one latched at note-on (0x5C).
-    const int sustain = static_cast<ushort>(sustainQ15_);
-    const int heldSustain = heldSustainQ15_;
-    start = static_cast<short>(start);
-
-    uint remaining = numSamples;
-    short *out = output;
-
-    if (position <= attackLength) {
-        const uint fadeLength = attackLength < 32 ? attackLength : 32;
-        int ramp = attackStep_ * static_cast<int>(position);
-        switch (attackCurve_) {
-        case Curve::Logarithmic: {
-            // The log attack fades from the level latched at note-on, every
-            // block, and doubles the shaped value after offsetting it.
-            const int previous = previousLevel_;
-            lastOutput_ = previousLevel_;
-            while (remaining != 0 && position < fadeLength && position != attackLength) {
-                const int shapedLevel = high15(mulLow(logShape((static_cast<uint>(ramp) >> 10) & 0xFFFF), span)) + start;
-                int shaped;
-                if (shapedLevel >= 0x8000) {
-                    shaped = -2;
-                } else if (shapedLevel >= -0x7FFF) {
-                    shaped = static_cast<short>(shapedLevel << 1);
+            m_nLastPosition = position;
+            if (!m_bHeld) {
+                // A new note. With the 0x61 byte set it rises from the last level.
+                attackLength = m_nAttackSamples;
+                decayLength = m_nDecaySamples;
+                m_nNoteAttackSamples = attackLength;
+                m_nNoteDecaySamples = decayLength;
+                m_sPrevious = m_sLast;
+                if (m_bStartFromCurrent) {
+                    start = m_sLast;
+                    span = static_cast<ushort>(0x7FFF - static_cast<ushort>(m_sLast));
                 } else {
-                    shaped = 2;
+                    start = 0;
+                    span = 0x7FFF;
                 }
-                const int difference = clamp16(static_cast<short>(-previous) + shaped);
-                *out++ = static_cast<short>(clamp16(previous + ((fadeWeight(position, fadeLength) * difference) >> 15)));
-                ramp += attackStep_;
-                ++position;
-                --remaining;
+                m_nAttackStep = stepFor(attackLength);
+                m_nDecayStep = stepFor(decayLength);
+                m_sNoteSustain = m_sSustain;
+                m_sAttackStart = static_cast<short>(start);
+                m_bIdle = false;
+            } else {
+                start = m_sAttackStart;
+                span = static_cast<ushort>(0x7FFF - static_cast<ushort>(m_sAttackStart));
+                attackLength = m_nNoteAttackSamples;
+                decayLength = m_nNoteDecaySamples;
             }
-            while (remaining != 0 && position != attackLength) {
-                const int shaped = logShape((static_cast<uint>(ramp) >> 10) & 0xFFFF) << 1;
-                *out++ = static_cast<short>(clamp16(high15(mulLow(shaped, span)) + start));
-                ramp += attackStep_;
-                ++position;
-                --remaining;
-            }
-            break;
         }
-        case Curve::Linear: {
-            // The linear and exponential attacks fade from whatever they wrote
-            // last, sample by sample.
-            int previous = static_cast<ushort>(lastOutput_);
-            const auto shapedAt = [&](int value) {
-                uint level = static_cast<uint>(value) >> 9;
-                if (level >= 0x7FFF) {
-                    level = 0x7FFF;
-                }
-                return start + ((static_cast<short>(span) * static_cast<int>(level)) >> 15);
-            };
-            if (remaining != 0 && position < fadeLength) {
+        m_bHeld = true;
+
+        // Sustain fills and the decay's span use the current sustain (0x54); the
+        // decay's floor uses the one latched at note-on (0x5C).
+        const int sustain = static_cast<ushort>(m_sSustain);
+        const int heldSustain = m_sNoteSustain;
+        start = static_cast<short>(start);
+
+        uint remaining = numSamples;
+        short *out = output;
+
+        if (position <= attackLength) {
+            const uint fadeLength = attackLength < 32 ? attackLength : 32;
+            int ramp = m_nAttackStep * static_cast<int>(position);
+            switch (m_nAttackCurve) {
+            case kLogarithmic: {
+                // The log attack fades from the level latched at note-on, every
+                // block, and doubles the shaped value after offsetting it.
+                const int previous = m_sPrevious;
+                m_sLast = m_sPrevious;
                 while (remaining != 0 && position < fadeLength && position != attackLength) {
-                    previous = static_cast<ushort>(fadeFrom(previous, clamp16(shapedAt(ramp)), position, fadeLength));
-                    *out++ = static_cast<short>(previous);
-                    ramp += attackStep_;
+                    const int shapedLevel = high15(mulLow(logShape((static_cast<uint>(ramp) >> 10) & 0xFFFF), span)) + start;
+                    int shaped;
+                    if (shapedLevel >= 0x8000) {
+                        shaped = -2;
+                    } else if (shapedLevel >= -0x7FFF) {
+                        shaped = static_cast<short>(shapedLevel << 1);
+                    } else {
+                        shaped = 2;
+                    }
+                    const int difference = clamp16(static_cast<short>(-previous) + shaped);
+                    *out++ = static_cast<short>(clamp16(previous + ((fadeWeight(position, fadeLength) * difference) >> 15)));
+                    ramp += m_nAttackStep;
                     ++position;
                     --remaining;
                 }
-                lastOutput_ = static_cast<short>(previous);
-            }
-            while (remaining != 0 && position != attackLength) {
-                *out++ = static_cast<short>(clamp16(shapedAt(ramp)));
-                ramp += attackStep_;
-                ++position;
-                --remaining;
-            }
-            break;
-        }
-        case Curve::Exponential: {
-            int previous = static_cast<ushort>(lastOutput_);
-            const auto shapedAt = [&](int value) {
-                const int s = (static_cast<uint>(value) >> 9) & 0xFFFF;
-                return high15(mulLow(expShape(s), span)) + start;
-            };
-            if (remaining != 0 && position < fadeLength) {
-                while (remaining != 0 && position < fadeLength && position != attackLength) {
-                    previous = static_cast<ushort>(fadeFrom(previous, clamp16(shapedAt(ramp)), position, fadeLength));
-                    *out++ = static_cast<short>(previous);
-                    ramp += attackStep_;
+                while (remaining != 0 && position != attackLength) {
+                    const int shaped = logShape((static_cast<uint>(ramp) >> 10) & 0xFFFF) << 1;
+                    *out++ = static_cast<short>(clamp16(high15(mulLow(shaped, span)) + start));
+                    ramp += m_nAttackStep;
                     ++position;
                     --remaining;
                 }
-                lastOutput_ = static_cast<short>(previous);
+                break;
             }
-            while (remaining != 0 && position != attackLength) {
-                *out++ = static_cast<short>(clamp16(shapedAt(ramp)));
-                ramp += attackStep_;
-                ++position;
-                --remaining;
+            case kLinear: {
+                // The linear and exponential attacks fade from whatever they wrote
+                // last, sample by sample.
+                int previous = static_cast<ushort>(m_sLast);
+                const auto shapedAt = [&](int value) {
+                    uint level = static_cast<uint>(value) >> 9;
+                    if (level >= 0x7FFF) {
+                        level = 0x7FFF;
+                    }
+                    return start + ((static_cast<short>(span) * static_cast<int>(level)) >> 15);
+                };
+                if (remaining != 0 && position < fadeLength) {
+                    while (remaining != 0 && position < fadeLength && position != attackLength) {
+                        previous = static_cast<ushort>(fadeFrom(previous, clamp16(shapedAt(ramp)), position, fadeLength));
+                        *out++ = static_cast<short>(previous);
+                        ramp += m_nAttackStep;
+                        ++position;
+                        --remaining;
+                    }
+                    m_sLast = static_cast<short>(previous);
+                }
+                while (remaining != 0 && position != attackLength) {
+                    *out++ = static_cast<short>(clamp16(shapedAt(ramp)));
+                    ramp += m_nAttackStep;
+                    ++position;
+                    --remaining;
+                }
+                break;
             }
-            break;
+            case kExponential: {
+                int previous = static_cast<ushort>(m_sLast);
+                const auto shapedAt = [&](int value) {
+                    const int s = (static_cast<uint>(value) >> 9) & 0xFFFF;
+                    return high15(mulLow(expShape(s), span)) + start;
+                };
+                if (remaining != 0 && position < fadeLength) {
+                    while (remaining != 0 && position < fadeLength && position != attackLength) {
+                        previous = static_cast<ushort>(fadeFrom(previous, clamp16(shapedAt(ramp)), position, fadeLength));
+                        *out++ = static_cast<short>(previous);
+                        ramp += m_nAttackStep;
+                        ++position;
+                        --remaining;
+                    }
+                    m_sLast = static_cast<short>(previous);
+                }
+                while (remaining != 0 && position != attackLength) {
+                    *out++ = static_cast<short>(clamp16(shapedAt(ramp)));
+                    ramp += m_nAttackStep;
+                    ++position;
+                    --remaining;
+                }
+                break;
+            }
+            }
         }
-        }
-    }
 
-    const uint decayEnd = decayLength + attackLength;
-    if (position <= decayEnd) {
-        const int decaySpan = static_cast<ushort>(0x7FFF - sustain);
-        int ramp = kRampStart - decayStep_ * static_cast<int>(position - attackLength);
-        switch (decayCurve_) {
-        case Curve::Linear:
-            while (position != decayEnd && remaining != 0) {
-                const int level = floorAtZero(static_cast<short>(ramp >> 9));
-                *out++ = static_cast<short>(clamp16(heldSustain + (mulLow(level, decaySpan) >> 15)));
-                ramp -= decayStep_;
-                ++position;
-                --remaining;
+        const uint decayEnd = decayLength + attackLength;
+        if (position <= decayEnd) {
+            const int decaySpan = static_cast<ushort>(0x7FFF - sustain);
+            int ramp = kRampStart - m_nDecayStep * static_cast<int>(position - attackLength);
+            switch (m_nDecayCurve) {
+            case kLinear:
+                while (position != decayEnd && remaining != 0) {
+                    const int level = floorAtZero(static_cast<short>(ramp >> 9));
+                    *out++ = static_cast<short>(clamp16(heldSustain + (mulLow(level, decaySpan) >> 15)));
+                    ramp -= m_nDecayStep;
+                    ++position;
+                    --remaining;
+                }
+                break;
+            case kLogarithmic:
+                while (position != decayEnd && remaining != 0) {
+                    const int s = static_cast<ushort>(floorAtZero(static_cast<short>(ramp >> 10)));
+                    const int shaped = logShape(s) << 1;
+                    *out++ = static_cast<short>(clamp16(high15(mulLow(shaped, decaySpan)) + heldSustain));
+                    ramp -= m_nDecayStep;
+                    ++position;
+                    --remaining;
+                }
+                break;
+            case kExponential:
+                while (position != decayEnd && remaining != 0) {
+                    const int s = floorAtZero(static_cast<short>(ramp >> 9));
+                    const int squared = mulLow(s, s) >> 15;
+                    *out++ = static_cast<short>(clamp16(heldSustain + ((static_cast<short>(decaySpan) * squared) >> 15)));
+                    ramp -= m_nDecayStep;
+                    ++position;
+                    --remaining;
+                }
+                break;
             }
-            break;
-        case Curve::Logarithmic:
-            while (position != decayEnd && remaining != 0) {
-                const int s = static_cast<ushort>(floorAtZero(static_cast<short>(ramp >> 10)));
-                const int shaped = logShape(s) << 1;
-                *out++ = static_cast<short>(clamp16(high15(mulLow(shaped, decaySpan)) + heldSustain));
-                ramp -= decayStep_;
-                ++position;
-                --remaining;
-            }
-            break;
-        case Curve::Exponential:
-            while (position != decayEnd && remaining != 0) {
-                const int s = floorAtZero(static_cast<short>(ramp >> 9));
-                const int squared = mulLow(s, s) >> 15;
-                *out++ = static_cast<short>(clamp16(heldSustain + ((static_cast<short>(decaySpan) * squared) >> 15)));
-                ramp -= decayStep_;
-                ++position;
-                --remaining;
-            }
-            break;
         }
-    }
 
-    if (remaining == 0) {
-        if (out != output) {
-            lastOutput_ = out[-1];
+        if (remaining == 0) {
+            if (out != output) {
+                m_sLast = out[-1];
+            }
+            return;
         }
-        return;
+        while (remaining-- != 0) {
+            *out++ = static_cast<short>(sustain);
+        }
+        m_sLast = static_cast<short>(sustain);
     }
-    while (remaining-- != 0) {
-        *out++ = static_cast<short>(sustain);
-    }
-    lastOutput_ = static_cast<short>(sustain);
 }

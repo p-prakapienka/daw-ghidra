@@ -280,7 +280,7 @@ TEST(SubSynthVoice, EndsWhenTheAmplitudeEnvelopeIsDone) {
 
     voice.voltage.noteOff();
     const unsigned int tail =
-        voice.amplitudeEnvelope.releaseSamples() + ADSR::kReleaseTailSamples;
+        voice.amplitudeEnvelope.m_nReleaseSamples + 0x800u;
     render(voice, shared, tail);
     EXPECT_TRUE(voice.isActive());
 

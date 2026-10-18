@@ -31,25 +31,25 @@ SubSynth::SubSynth() : pitchSweepDecay(kSweepDownDecay) {
         voice.setFilterEnvelope();
         ADSR &filter = voice.filterEnvelope;
         filter.SetMinSamples(10, 20, 200);
-        filter.setAttackSeconds(0.0f);
+        filter.m_fAttack = 0.0f;
         filter.OnParamModified();
-        filter.setDecaySeconds(0.0f);
+        filter.m_fDecay = 0.0f;
         filter.OnParamModified();
-        filter.setSustainLevel(1.0f);
+        filter.m_fSustain = 1.0f;
         filter.OnParamModified();
-        filter.setReleaseSeconds(2.0f);
+        filter.m_fRelease = 2.0f;
         filter.OnParamModified();
 
         ADSR &amplitude = voice.amplitudeEnvelope;
-        amplitude.setAttackSeconds(0.0f);
+        amplitude.m_fAttack = 0.0f;
         amplitude.OnParamModified();
-        amplitude.setDecaySeconds(0.0f);
+        amplitude.m_fDecay = 0.0f;
         amplitude.OnParamModified();
-        amplitude.setSustainLevel(16777215.0f);
+        amplitude.m_fSustain = 16777215.0f;
         amplitude.OnParamModified();
-        amplitude.setReleaseSeconds(0.0f);
+        amplitude.m_fRelease = 0.0f;
         amplitude.OnParamModified();
-        amplitude.setStartFromCurrentLevel(true);
+        amplitude.m_bStartFromCurrent = true;
     }
     setPolyphony(kDefaultPolyphony);
 }
@@ -140,7 +140,7 @@ void SubSynth::setPolyphony(int requested) {
     // All sixteen slots, not just the enabled ones. Each filter envelope's
     // byte at +0x61 takes +0xC2F9 as it now stands (0x9ccdc).
     for (SubSynthVoice &voice : this->voices) {
-        voice.filterEnvelope.setStartFromCurrentLevel(flagC2F9_);
+        voice.filterEnvelope.m_bStartFromCurrent = flagC2F9_;
         resetVoltage(voice.voltage);
         voice.level.smoothing = SubSynthVoice::kLevelSmoothing;
     }

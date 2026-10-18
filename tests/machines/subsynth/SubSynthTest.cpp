@@ -157,8 +157,8 @@ TEST(SubSynthRelease, NoteOffClosesTheGateAndTheVoiceEnds) {
     EXPECT_EQ(synth->notesOn(), 0);
     EXPECT_EQ(synth->notesPlaying(), 1);
 
-    const unsigned int tail = synth->voices[0].amplitudeEnvelope.releaseSamples()
-                              + ADSR::kReleaseTailSamples;
+    const unsigned int tail = synth->voices[0].amplitudeEnvelope.m_nReleaseSamples
+                              + 0x800u;
     render(*synth, tail / kBlock + 2);
     EXPECT_EQ(synth->notesPlaying(), 0);
 }
@@ -319,12 +319,12 @@ TEST(SubSynthConstruction, EnvelopesStartAsTheEngineSetsThem) {
     const auto synth = makeSynth();
     for (const auto &voice : synth->voices) {
         // SetMinSamples(10, 20, 200), attack and decay 0, release 2 s.
-        EXPECT_EQ(voice.filterEnvelope.attackSamples(), 10u);
-        EXPECT_EQ(voice.filterEnvelope.decaySamples(), 20u);
-        EXPECT_EQ(voice.filterEnvelope.releaseSamples(), 88200u);
-        EXPECT_FALSE(voice.filterEnvelope.startsFromCurrentLevel());
+        EXPECT_EQ(voice.filterEnvelope.m_nAttackSamples, 10u);
+        EXPECT_EQ(voice.filterEnvelope.m_nDecaySamples, 20u);
+        EXPECT_EQ(voice.filterEnvelope.m_nReleaseSamples, 88200u);
+        EXPECT_FALSE(voice.filterEnvelope.m_bStartFromCurrent);
         // Sustain 16777215.0 clamps to 0xFFFF until the controls replace it.
-        EXPECT_EQ(voice.amplitudeEnvelope.sustainQ15(), -1);
-        EXPECT_TRUE(voice.amplitudeEnvelope.startsFromCurrentLevel());
+        EXPECT_EQ(voice.amplitudeEnvelope.m_sSustain, -1);
+        EXPECT_TRUE(voice.amplitudeEnvelope.m_bStartFromCurrent);
     }
 }

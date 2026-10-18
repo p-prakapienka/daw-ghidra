@@ -8,38 +8,38 @@
 
 namespace {
 
-const char *curveName(ADSR::Curve curve) {
+const char *curveName(int curve) {
     switch (curve) {
-    case ADSR::Curve::Logarithmic: return "logarithmic";
-    case ADSR::Curve::Linear: return "linear";
-    case ADSR::Curve::Exponential: return "exponential";
+    case ADSR::kLogarithmic: return "logarithmic";
+    case ADSR::kLinear: return "linear";
+    case ADSR::kExponential: return "exponential";
     }
     return "unknown";
 }
 
 // Runs one note and prints the envelope as rows of characters.
-void plotEnvelope(ADSR::Curve curve) {
+void plotEnvelope(int curve) {
     ADSR envelope;
-    envelope.setAttackSeconds(0.05f);
-    envelope.setDecaySeconds(0.10f);
-    envelope.setSustainLevel(0.5f);
-    envelope.setReleaseSeconds(0.10f);
-    envelope.setAttackCurve(curve);
-    envelope.setDecayCurve(curve);
-    envelope.setReleaseCurve(curve);
+    envelope.m_fAttack = 0.05f;
+    envelope.m_fDecay = 0.10f;
+    envelope.m_fSustain = 0.5f;
+    envelope.m_fRelease = 0.10f;
+    envelope.m_nAttackCurve = curve;
+    envelope.m_nDecayCurve = curve;
+    envelope.m_nReleaseCurve = curve;
     envelope.OnParamModified();
 
-    const unsigned int held = envelope.attackSamples() + envelope.decaySamples() + 2000;
-    const unsigned int released = envelope.releaseSamples() + 2000;
+    const unsigned int held = envelope.m_nAttackSamples + envelope.m_nDecaySamples + 2000;
+    const unsigned int released = envelope.m_nReleaseSamples + 2000;
 
     std::vector<short> values(held + released);
     envelope.GenerateValues(0, 1, values.data(), held);
     envelope.GenerateValues(0, 0, values.data() + held, released);
 
-    std::cout << curveName(curve) << "  attack=" << envelope.attackSamples()
-              << " decay=" << envelope.decaySamples()
-              << " release=" << envelope.releaseSamples()
-              << " sustain=" << envelope.sustainQ15() << '\n';
+    std::cout << curveName(curve) << "  attack=" << envelope.m_nAttackSamples
+              << " decay=" << envelope.m_nDecaySamples
+              << " release=" << envelope.m_nReleaseSamples
+              << " sustain=" << envelope.m_sSustain << '\n';
 
     const auto step = static_cast<unsigned int>(values.size() / 64);
     for (unsigned int index = 0; index < values.size(); index += step) {
@@ -56,9 +56,9 @@ int main() {
     auto filter = soundtouch::AAFilter(8);
     filter.setCutoffFreq(0.5);
 
-    plotEnvelope(ADSR::Curve::Linear);
-    plotEnvelope(ADSR::Curve::Logarithmic);
-    plotEnvelope(ADSR::Curve::Exponential);
+    plotEnvelope(ADSR::kLinear);
+    plotEnvelope(ADSR::kLogarithmic);
+    plotEnvelope(ADSR::kExponential);
 
     return 0;
 }
