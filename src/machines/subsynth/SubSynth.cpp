@@ -25,18 +25,14 @@ SubSynth::SubSynth() : pitchSweepDecay(kSweepDownDecay) {
     // sustain 16777215.0, and the byte at +0x61 set, so a new note rises from
     // the level the voice is at. The control defaults applied through
     // OnChildModified afterwards replace most of these (SubSynthControls).
-    // The default modulation source (0xa0494-0xa04d0): the "off" waveform and
-    // no depth, each followed by OnParamModified, then one block generated,
-    // so every input that nothing aims at reads zeros.
-    shared.defaultSource.m_nWaveform = LFO::kOff;
-    shared.defaultSource.OnParamModified();
-    shared.defaultSource.m_nDepth = 0;
-    shared.defaultSource.OnParamModified();
-    shared.defaultSource.GenerateInternal(LFO::kBlockSize);
+    // The default modulation source (0xa0494-0xa04d0) is set up by
+    // SubSynthVoice::Shared's constructor.
 
     // Both oscillators can play both custom tables (0xa02c0-0xa02e4).
-    shared.oscillator1.setCustomTables(customWavetables_[0].data(), customWavetables_[1].data());
-    shared.oscillator2.setCustomTables(customWavetables_[0].data(), customWavetables_[1].data());
+    shared.oscillator1.m_psCustomTable1 = customWavetables_[0].data();
+    shared.oscillator1.m_psCustomTable2 = customWavetables_[1].data();
+    shared.oscillator2.m_psCustomTable1 = customWavetables_[0].data();
+    shared.oscillator2.m_psCustomTable2 = customWavetables_[1].data();
 
     for (SubSynthVoice &voice : voices) {
         voice.setFilterEnvelope();
@@ -93,6 +89,7 @@ void SubSynth::setLFOTargets(LFO::Target target1, LFO::Target target2) {
     lfo1Target_ = target1;
     lfo2Target_ = target2;
     shared.routing = SubSynthRouting::connect(lfo1, target1, lfo2, target2);
+    shared.connectOscillators();
 }
 
 void SubSynth::resetVoltage(ControlVoltage &voltage) {

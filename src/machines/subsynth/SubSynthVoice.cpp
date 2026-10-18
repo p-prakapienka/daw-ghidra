@@ -14,21 +14,19 @@ constexpr int kOne24 = 0x00FFFFFF;
 
 // Aim one LFO at its target, the body of one ConnectLFOs switch.
 void aim(SubSynthRouting &routing, LFO &lfo, LFO::Target target) {
-    const int *source = lfo.m_pnOutput;
-    LFO *const object = &lfo;
     switch (target) {
-    case LFO::Target::Oscillator1Pitch: routing.oscillator1.vibrato = source; break;
-    case LFO::Target::Oscillator2Pitch: routing.oscillator2.vibrato = source; break;
+    case LFO::Target::Oscillator1Pitch: routing.oscillator1Vibrato = &lfo; break;
+    case LFO::Target::Oscillator2Pitch: routing.oscillator2Vibrato = &lfo; break;
     case LFO::Target::BothPitch:
-        routing.oscillator1.vibrato = source;
-        routing.oscillator2.vibrato = source;
+        routing.oscillator1Vibrato = &lfo;
+        routing.oscillator2Vibrato = &lfo;
         break;
-    case LFO::Target::Oscillator2Phase: routing.oscillator2.phase = source; break;
-    case LFO::Target::Cutoff: routing.cutoff = object; break;
-    case LFO::Target::Volume: routing.volume = source; break;
-    case LFO::Target::Oscillator2Octave: routing.oscillator2.octave = source; break;
-    case LFO::Target::Oscillator2Semitones: routing.oscillator2.semitones = source; break;
-    case LFO::Target::Oscillator1Modulation: routing.oscillator1.fmDepth = source; break;
+    case LFO::Target::Oscillator2Phase: routing.oscillator2Phase = &lfo; break;
+    case LFO::Target::Cutoff: routing.cutoff = &lfo; break;
+    case LFO::Target::Volume: routing.volume = &lfo; break;
+    case LFO::Target::Oscillator2Octave: routing.oscillator2Octave = &lfo; break;
+    case LFO::Target::Oscillator2Semitones: routing.oscillator2Semitones = &lfo; break;
+    case LFO::Target::Oscillator1Modulation: routing.oscillator1FMDepth = &lfo; break;
     default:
         // Target 0 and anything above 9 leave the inputs and the LFO's phase
         // offset alone.
@@ -47,6 +45,30 @@ SubSynthRouting SubSynthRouting::connect(LFO &lfo1, LFO::Target target1, LFO &lf
     return routing;
 }
 
+SubSynthVoice::Shared::Shared() {
+    defaultSource.m_nWaveform = LFO::kOff;
+    defaultSource.OnParamModified();
+    defaultSource.m_nDepth = 0;
+    defaultSource.OnParamModified();
+    defaultSource.GenerateInternal(LFO::kBlockSize);
+    connectOscillators();
+}
+
+void SubSynthVoice::Shared::connectOscillators() {
+    LFO *const def = &defaultSource;
+    const auto pick = [def](LFO *source) { return source != nullptr ? source : def; };
+    oscillator1.m_pVibrato = pick(routing.oscillator1Vibrato);
+    oscillator1.m_pPhase = def;
+    oscillator1.m_pOctave = def;
+    oscillator1.m_pSemitones = def;
+    oscillator1.m_pFMDepth = pick(routing.oscillator1FMDepth);
+    oscillator2.m_pVibrato = pick(routing.oscillator2Vibrato);
+    oscillator2.m_pPhase = pick(routing.oscillator2Phase);
+    oscillator2.m_pOctave = pick(routing.oscillator2Octave);
+    oscillator2.m_pSemitones = pick(routing.oscillator2Semitones);
+    oscillator2.m_pFMDepth = def;
+}
+
 void SubSynthVoice::Shared::setMix(float mix) {
     mixQ24 = static_cast<std::int32_t>(mix * kQ24Scale);
 }
@@ -57,12 +79,9 @@ void SubSynthVoice::Shared::setModulationAmount(float amount) {
 
 void SubSynthVoice::Shared::setOscillator2Waveform(int controlValue) {
     oscillator2Enabled = controlValue != 0;
-    // The engine calls SetOscillatorType(value - 1) even for 0; -1 falls
-    // outside its switch and only the stored type changes. Oscillator 2 is
-    // not rendered while disabled, so skipping the call is equivalent.
-    if (oscillator2Enabled) {
-        oscillator2.setType(static_cast<Oscillator::Type>(controlValue - 1));
-    }
+    // The engine calls SetOscillatorType(value - 1) even for 0: -1 falls
+    // outside its switch, so only the stored type changes.
+    oscillator2.SetOscillatorType(static_cast<Oscillator::OscillatorType>(controlValue - 1));
 }
 
 std::int32_t SubSynthVoice::levelTarget(float voiceGain, float velocity) {
@@ -97,22 +116,19 @@ void SubSynthVoice::process(Shared &shared, int *output, uint numSamples) {
     // The target is recomputed every block; the smoother below chases it.
     level.target = levelTarget(shared.voiceGain, voltage.m_fVelocity);
 
-    // Oscillator 2 first, into its own buffer, with no modulator of its own.
+    // Oscillator 2 first, into its own buffer. Its modulator is its own
+    // output buffer at amount 0, which is how ProcessChannel calls it.
     if (shared.oscillator2Enabled) {
-        Oscillator::Modulation modulation = shared.routing.oscillator2;
-        modulation.fmInput = nullptr;
-        modulation.fmAmount = 0;
-        shared.oscillator2.generate(voltage, 1, second, numSamples, modulation, shared.bend);
+        shared.oscillator2.GenerateSignal(&voltage, 1, second, numSamples, second, 0, shared.bend);
     } else {
         std::fill(second, second + numSamples, 0);
     }
 
     // Oscillator 1 takes oscillator 2 as its modulator. The modulation mode
     // set on oscillator 1 decides whether that is FM, PM or AM.
-    Oscillator::Modulation modulation = shared.routing.oscillator1;
-    modulation.fmInput = second;
-    modulation.fmAmount = multiply24(shared.modulationAmountQ24, kModulationAmountScale);
-    shared.oscillator1.generate(voltage, 0, mix, numSamples, modulation, shared.bend);
+    shared.oscillator1.GenerateSignal(&voltage, 0, mix, numSamples, second,
+                                      multiply24(shared.modulationAmountQ24, kModulationAmountScale),
+                                      shared.bend);
 
     if (shared.oscillator2Enabled) {
         crossfade(second, mix, shared.mixQ24, numSamples);
@@ -127,10 +143,11 @@ void SubSynthVoice::process(Shared &shared, int *output, uint numSamples) {
     // Level smoothing, volume modulation and accumulation, per sample. The
     // default volume source contributes zero, so the factor is 0xFFFFFF, not
     // exactly one.
-    const int *volume = shared.routing.volume;
+    const int *volume = (shared.routing.volume != nullptr ? shared.routing.volume
+                                                          : &shared.defaultSource)->m_pnOutput;
     for (uint index = 0; index < numSamples; ++index) {
         level.current = level.target + multiply24(level.current - level.target, level.smoothing);
-        const int lift = (volume != nullptr ? volume[index] : 0) + kOne24;
+        const int lift = volume[index] + kOne24;
         output[index] += multiply24(mix[index], multiply24(level.current, lift));
     }
 

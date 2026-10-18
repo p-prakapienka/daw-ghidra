@@ -168,12 +168,12 @@ float SubSynthControls::value(int id) const {
 
 void SubSynthControls::setModulationMode(int mode) {
     modulationMode_ = mode;
-    synth_.shared.oscillator1.setModulationMode(static_cast<Oscillator::ModulationMode>(mode));
+    synth_.shared.oscillator1.SetModulationMode(static_cast<Oscillator::ModulationMode>(mode));
 }
 
 void SubSynthControls::setCentsMode(int mode) {
     centsMode_ = mode;
-    synth_.shared.oscillator1.setPitchRatio(mode == 0 ? 1.0f : centsRatio(-value(8)));
+    synth_.shared.oscillator1.m_fPitchRatio = mode == 0 ? 1.0f : centsRatio(-value(8));
 }
 
 bool SubSynthControls::applyMidiTarget(int id, float value) {
@@ -263,32 +263,22 @@ void SubSynthControls::applyEffect(int id) {
     const float v = value(id);
 
     switch (id) {
-    case 1: {
+    case 1:
         // SetOscillatorType stores any value but only switches tables for
         // 0..8; outside that the playing table is kept.
-        const int type = toInt(v);
-        if (type >= 0 && type <= 8) {
-            shared.oscillator1.setType(static_cast<Oscillator::Type>(type));
-        }
+        shared.oscillator1.SetOscillatorType(static_cast<Oscillator::OscillatorType>(toInt(v)));
         break;
-    }
     case 2:
         shared.setMix(v);
         break;
     case 3:
         synth_.setPitchSweep(v);
         break;
-    case 4: {
-        const int controlValue = toInt(v);
-        if (controlValue >= 0 && controlValue <= 9) {
-            shared.setOscillator2Waveform(controlValue);
-        } else {
-            shared.oscillator2Enabled = true;
-        }
+    case 4:
+        shared.setOscillator2Waveform(toInt(v));
         break;
-    }
     case 5:
-        shared.oscillator2.setPhaseOffset(static_cast<int>(v * 4096.0f));
+        shared.oscillator2.m_nPhaseOffset = static_cast<int>(v * 4096.0f);
         break;
     case 6:
     case 7:
@@ -396,11 +386,11 @@ void SubSynthControls::updateOscillator2Pitch(bool fromCents) {
     float ratio = std::pow(2.0f, value(6) * 12.0f / 12.0f);
     ratio *= std::pow(2.0f, value(7) / 12.0f);
     ratio *= centsRatio(value(8));
-    synth_.shared.oscillator2.setPitchRatio(ratio);
+    synth_.shared.oscillator2.m_fPitchRatio = ratio;
 
     // Only the cents knob refreshes oscillator 1, and only in cents mode 1.
     if (fromCents && centsMode_ == 1) {
-        synth_.shared.oscillator1.setPitchRatio(centsRatio(-value(8)));
+        synth_.shared.oscillator1.m_fPitchRatio = centsRatio(-value(8));
     }
 }
 

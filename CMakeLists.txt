@@ -50,6 +50,7 @@ add_library(engine STATIC
         src/dsp/FixedPointSVFilter.cpp
         src/dsp/LFO.cpp
         src/dsp/Oscillator.cpp
+        src/dsp/WaveTables.cpp
         src/ui/CustomWaveform.cpp
         src/ui/Keyboard.cpp
         src/machines/subsynth/SubSynth.cpp
