@@ -4,7 +4,7 @@
 
 #include <AAFilter.h>
 
-#include "components/ADSR.h"
+#include "dsp/ADSR.h"
 
 namespace {
 
