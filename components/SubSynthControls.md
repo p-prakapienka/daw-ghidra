@@ -358,16 +358,15 @@ the UI controls do:
 - `applyAutomation` and `applyMidiTarget` are the two event paths.
   Both ignore the control byte `+0x07`, whose meaning is not established.
 - `load(archive)` follows `Serialize`'s order: every control in the
-  collection, then `SetPolyphony`, the modulation mode and the cents mode,
-  then the time fix-up and the waveform renumbering.
+  collection, the two custom waveforms, then `SetPolyphony`, the modulation
+  mode and the cents mode, then the time fix-up and the waveform
+  renumbering.
 - `resetToDefaults()` sets every modelled control to its default through
   `set`, as the constructor does.
 
 Not modelled:
 
 - the preset browser (id 0) and the UI-only automatic ids (33–45);
-- the custom waveform points, which `Serialize` passes through the waveform
-  dialog's `GetWaveform`, not reconstructed;
 - the preset name and path and the keyboard octave.
 
 A waveform value outside the oscillator's types leaves the playing type

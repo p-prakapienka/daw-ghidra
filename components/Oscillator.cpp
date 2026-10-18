@@ -260,15 +260,21 @@ Oscillator::Oscillator() {
 
 void Oscillator::setType(Type type) {
     type_ = type;
-    table_ = table(type);
+    if (type == Type::Custom1) {
+        table_ = customTables_[0];
+    } else if (type == Type::Custom2) {
+        table_ = customTables_[1];
+    } else {
+        table_ = table(type);
+    }
     bandTable_ = bandLimitedTable(type);
 }
 
 namespace {
 
-// The engine's 16-bit saturation: at or above 0x8000 gives 0x7FFF, below
+// The engine's 16-bit clamp: at or above 0x8000 gives 0x7FFF, below
 // -0x7FFF gives -0x7FFF.
-int saturate16(int value) {
+int clamp16(int value) {
     if (value >= 0x8000) {
         return 0x7FFF;
     }
@@ -287,22 +293,22 @@ int Oscillator::readTable(uint index, int fraction) const {
     int value;
     if (bandTable_ != nullptr) {
         // GenerateSignalHQ interpolates band b and band b + 1 at the same
-        // phase, each saturated, then blends them by the band weight.
+        // phase, each clamped, then blends them by the band weight.
         const auto interpolate = [&](uint band) {
             const int current = bandTable_[position * kBandCount + band];
             const int following = bandTable_[next * kBandCount + band];
-            return saturate16(current + ((saturate16(following - current) * fraction) >> 15));
+            return clamp16(current + ((clamp16(following - current) * fraction) >> 15));
         };
         const int lower = interpolate(band_);
         const int upper = interpolate(band_ + 1);
-        value = lower + ((bandWeight_ * saturate16(upper - lower)) >> 15);
+        value = lower + ((bandWeight_ * clamp16(upper - lower)) >> 15);
     } else {
-        // The difference saturates before it is scaled, as the engine does
+        // The difference is clamped before it is scaled, as the engine does
         // with cmp #0x8000 / movwge #0x7fff. fraction is the low 12 phase
         // bits widened to Q15.
         const int current = table_[position];
         const int following = table_[next];
-        value = current + ((saturate16(following - current) * fraction) >> 15);
+        value = current + ((clamp16(following - current) * fraction) >> 15);
     }
 
     // Q15 to Q24 with the engine's clamp.

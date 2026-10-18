@@ -23,6 +23,10 @@ SubSynth::SubSynth() : pitchSweepDecay(kSweepDownDecay) {
     // sustain 16777215.0, and the byte at +0x61 set, so a new note rises from
     // the level the voice is at. The control defaults applied through
     // OnChildModified afterwards replace most of these (SubSynthControls).
+    // Both oscillators can play both custom tables (0xa02c0-0xa02e4).
+    shared.oscillator1.setCustomTables(customWavetables_[0].data(), customWavetables_[1].data());
+    shared.oscillator2.setCustomTables(customWavetables_[0].data(), customWavetables_[1].data());
+
     for (SubSynthVoice &voice : voices) {
         ADSR &filter = voice.filterEnvelope;
         filter.SetMinSamples(10, 20, 200);
@@ -47,6 +51,14 @@ SubSynth::SubSynth() : pitchSweepDecay(kSweepDownDecay) {
         amplitude.setStartFromCurrentLevel(true);
     }
     setPolyphony(kDefaultPolyphony);
+}
+
+void SubSynth::refreshCustomWavetable(int index) {
+    if (index != 0 && index != 1) {
+        return;
+    }
+    const auto slot = static_cast<std::size_t>(index);
+    customWaveforms[slot].getWaveform(customWavetables_[slot].data(), Oscillator::kTableSize, 0.3f);
 }
 
 void SubSynth::setPitchSweep(float value) {

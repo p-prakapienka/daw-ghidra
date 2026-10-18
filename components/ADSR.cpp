@@ -22,8 +22,8 @@ inline int high15(int product) {
     return static_cast<short>(product >> 15);
 }
 
-// The engine's saturation to -0x7FFF .. 0x7FFF.
-inline int saturate16(int value) {
+// The engine's clamp to -0x7FFF .. 0x7FFF.
+inline int clamp16(int value) {
     if (value >= 0x8000) {
         return 0x7FFF;
     }
@@ -53,7 +53,7 @@ inline int expShape(int s) {
     return (mulLow(s, s) >> 15) & 0xFFFF;
 }
 
-// vcvt.s32.f32: truncates, saturates at both ends, and turns NaN into 0. A
+// vcvt.s32.f32: truncates, clamps at both ends, and turns NaN into 0. A
 // plain static_cast is undefined out of range and gives INT_MIN on x86.
 int toInt(float value) {
     if (value != value) {
@@ -84,8 +84,8 @@ inline int fadeWeight(uint position, uint fadeLength) {
 // One step of the fade from the previously written sample towards the shaped
 // value, as the linear and exponential attacks do it.
 inline int fadeFrom(int previous, int shaped, uint position, uint fadeLength) {
-    const int difference = saturate16(shaped + static_cast<short>(-previous));
-    return saturate16(((fadeWeight(position, fadeLength) * difference) >> 15)
+    const int difference = clamp16(shaped + static_cast<short>(-previous));
+    return clamp16(((fadeWeight(position, fadeLength) * difference) >> 15)
                       + static_cast<short>(previous));
 }
 
@@ -113,7 +113,7 @@ void ADSR::OnParamModified() {
     attackSamples_ = resolve(attackSeconds_, minAttackSamples_);
     decaySamples_ = resolve(decaySeconds_, minDecaySamples_);
     releaseSamples_ = resolve(releaseSeconds_, minReleaseSamples_);
-    // vcvt.s32.f32, then strh: the low 16 bits of the saturated integer. The
+    // vcvt.s32.f32, then strh: the low 16 bits of the clamped integer. The
     // amplitude envelopes' constructor sustain of 16777215.0 lands on 0xFFFF.
     sustainQ15_ = static_cast<short>(toInt(sustainLevel_ * 32767.0f));
 }
@@ -284,15 +284,15 @@ void ADSR::generateHeld(uint position, short *output, uint numSamples) {
                 } else {
                     shaped = 2;
                 }
-                const int difference = saturate16(static_cast<short>(-previous) + shaped);
-                *out++ = static_cast<short>(saturate16(previous + ((fadeWeight(position, fadeLength) * difference) >> 15)));
+                const int difference = clamp16(static_cast<short>(-previous) + shaped);
+                *out++ = static_cast<short>(clamp16(previous + ((fadeWeight(position, fadeLength) * difference) >> 15)));
                 ramp += attackStep_;
                 ++position;
                 --remaining;
             }
             while (remaining != 0 && position != attackLength) {
                 const int shaped = logShape((static_cast<uint>(ramp) >> 10) & 0xFFFF) << 1;
-                *out++ = static_cast<short>(saturate16(high15(mulLow(shaped, span)) + start));
+                *out++ = static_cast<short>(clamp16(high15(mulLow(shaped, span)) + start));
                 ramp += attackStep_;
                 ++position;
                 --remaining;
@@ -312,7 +312,7 @@ void ADSR::generateHeld(uint position, short *output, uint numSamples) {
             };
             if (remaining != 0 && position < fadeLength) {
                 while (remaining != 0 && position < fadeLength && position != attackLength) {
-                    previous = static_cast<ushort>(fadeFrom(previous, saturate16(shapedAt(ramp)), position, fadeLength));
+                    previous = static_cast<ushort>(fadeFrom(previous, clamp16(shapedAt(ramp)), position, fadeLength));
                     *out++ = static_cast<short>(previous);
                     ramp += attackStep_;
                     ++position;
@@ -321,7 +321,7 @@ void ADSR::generateHeld(uint position, short *output, uint numSamples) {
                 lastOutput_ = static_cast<short>(previous);
             }
             while (remaining != 0 && position != attackLength) {
-                *out++ = static_cast<short>(saturate16(shapedAt(ramp)));
+                *out++ = static_cast<short>(clamp16(shapedAt(ramp)));
                 ramp += attackStep_;
                 ++position;
                 --remaining;
@@ -336,7 +336,7 @@ void ADSR::generateHeld(uint position, short *output, uint numSamples) {
             };
             if (remaining != 0 && position < fadeLength) {
                 while (remaining != 0 && position < fadeLength && position != attackLength) {
-                    previous = static_cast<ushort>(fadeFrom(previous, saturate16(shapedAt(ramp)), position, fadeLength));
+                    previous = static_cast<ushort>(fadeFrom(previous, clamp16(shapedAt(ramp)), position, fadeLength));
                     *out++ = static_cast<short>(previous);
                     ramp += attackStep_;
                     ++position;
@@ -345,7 +345,7 @@ void ADSR::generateHeld(uint position, short *output, uint numSamples) {
                 lastOutput_ = static_cast<short>(previous);
             }
             while (remaining != 0 && position != attackLength) {
-                *out++ = static_cast<short>(saturate16(shapedAt(ramp)));
+                *out++ = static_cast<short>(clamp16(shapedAt(ramp)));
                 ramp += attackStep_;
                 ++position;
                 --remaining;
@@ -363,7 +363,7 @@ void ADSR::generateHeld(uint position, short *output, uint numSamples) {
         case Curve::Linear:
             while (position != decayEnd && remaining != 0) {
                 const int level = floorAtZero(static_cast<short>(ramp >> 9));
-                *out++ = static_cast<short>(saturate16(heldSustain + (mulLow(level, decaySpan) >> 15)));
+                *out++ = static_cast<short>(clamp16(heldSustain + (mulLow(level, decaySpan) >> 15)));
                 ramp -= decayStep_;
                 ++position;
                 --remaining;
@@ -373,7 +373,7 @@ void ADSR::generateHeld(uint position, short *output, uint numSamples) {
             while (position != decayEnd && remaining != 0) {
                 const int s = static_cast<ushort>(floorAtZero(static_cast<short>(ramp >> 10)));
                 const int shaped = logShape(s) << 1;
-                *out++ = static_cast<short>(saturate16(high15(mulLow(shaped, decaySpan)) + heldSustain));
+                *out++ = static_cast<short>(clamp16(high15(mulLow(shaped, decaySpan)) + heldSustain));
                 ramp -= decayStep_;
                 ++position;
                 --remaining;
@@ -383,7 +383,7 @@ void ADSR::generateHeld(uint position, short *output, uint numSamples) {
             while (position != decayEnd && remaining != 0) {
                 const int s = floorAtZero(static_cast<short>(ramp >> 9));
                 const int squared = mulLow(s, s) >> 15;
-                *out++ = static_cast<short>(saturate16(heldSustain + ((static_cast<short>(decaySpan) * squared) >> 15)));
+                *out++ = static_cast<short>(clamp16(heldSustain + ((static_cast<short>(decaySpan) * squared) >> 15)));
                 ramp -= decayStep_;
                 ++position;
                 --remaining;

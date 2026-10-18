@@ -308,3 +308,38 @@ TEST(SubSynthControlLoad, DefaultsReachTheEngine) {
     EXPECT_EQ(rig.synth->shared.bend, 1.0f);
     EXPECT_EQ(rig.synth->shared.mixQ24, static_cast<std::int32_t>(0.5f * 16777215.0f));
 }
+
+TEST(SubSynthControlLoad, CustomWaveformsFillTheTables) {
+    Rig rig;
+    SubSynthArchive archive;
+    SubSynthArchive::Waveform first{};
+    SubSynthArchive::Waveform second{};
+    for (std::size_t point = 0; point < first.size(); ++point) {
+        first[point] = static_cast<std::int16_t>(point % 100);
+        second[point] = static_cast<std::int16_t>(-static_cast<int>(point % 50));
+    }
+    archive.customWaveform1 = first;
+    archive.customWaveform2 = second;
+    rig.controls.load(archive);
+    EXPECT_EQ(rig.synth->customWaveforms[0].height(99), 99.0f);
+    EXPECT_EQ(rig.synth->customWaveforms[1].height(49), -49.0f);
+    EXPECT_NE(rig.synth->customWavetable(0)[0], 0);
+
+    // Played as type 7, the oscillator reads the custom table.
+    rig.controls.set(1, 7.0f);
+    EXPECT_EQ(rig.synth->shared.oscillator1.type(), Oscillator::Type::Custom1);
+}
+
+TEST(SubSynthControlLoad, BeforeThreeTheSecondWaveformIsHalfCleared) {
+    Rig rig;
+    SubSynthArchive archive;
+    archive.version = 0x00020200;
+    SubSynthArchive::Waveform first{};
+    first.fill(25);
+    archive.customWaveform1 = first;
+    rig.controls.load(archive);
+    // 0x294 bytes cleared: the first 330 points, not all 660.
+    EXPECT_EQ(rig.synth->customWaveforms[1].height(329), 0.0f);
+    EXPECT_EQ(rig.synth->customWaveforms[1].height(330), 25.0f);
+    EXPECT_EQ(rig.synth->customWaveforms[1].height(659), 25.0f);
+}

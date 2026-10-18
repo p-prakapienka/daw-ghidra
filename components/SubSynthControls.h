@@ -107,10 +107,10 @@ public:
     // in-place targets, or the control's range from GetMinMaxValues.
     bool applyMidiTarget(int id, float value);
 
-    // SubSynth::Serialize's load path, in its order: the collection, then
-    // polyphony and the two modes, then the legacy fix-ups. Names, the preset
-    // path, the keyboard octave and the custom waveform points are UI or
-    // dialog state and are not applied.
+    // SubSynth::Serialize's load path, in its order: the collection, the
+    // custom waveforms, then polyphony and the two modes, then the legacy
+    // fix-ups. Names, the preset path and the keyboard octave are UI state and
+    // are not applied.
     void load(const SubSynthArchive &archive);
 
     // g_nPitchBendSemis, .data 0x343908. Its writers are not traced; the

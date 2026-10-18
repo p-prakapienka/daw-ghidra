@@ -42,6 +42,7 @@ endif ()
 add_library(components STATIC
         components/ADSR.cpp
         components/StateVariableFilter.cpp
+        components/CustomWaveform.cpp
         components/Oscillator.cpp
         components/ControlVoltage.cpp
         components/LFO.cpp
@@ -73,6 +74,7 @@ if (DAW_GHIDRA_BUILD_TESTS)
             tests/StateVariableFilterTest.cpp
             tests/OscillatorTest.cpp
             tests/ControlVoltageTest.cpp
+            tests/CustomWaveformTest.cpp
             tests/LFOTest.cpp
             tests/SubSynthVoiceTest.cpp
             tests/SubSynthTest.cpp

@@ -53,8 +53,14 @@ When loading:
 - The octave goes to `UIKeyboard::SetOctave`.
 - Each waveform goes through `UICustomWaveformDialog::SetRawValues`, then
   `GetWaveform(buffer, 4096, 0.3)` into the 4096-short tables at `+0x2F78`
-  and `+0x2F7C`. Those are what oscillator types 7 and 8 play. Before 3.0,
-  waveform 2's dialog is cleared instead.
+  and `+0x2F7C`. Those are what oscillator types 7 and 8 play
+  (`CustomWaveform.md`).
+- **Before 3.0 waveform 2 is half cleared, not cleared.** The engine runs
+  `memset(buffer, 0, 0x294)` on the buffer still holding waveform 1 and hands
+  it to the second dialog (`0x9d8d0`). `0x294` is 660 bytes, half of the 660
+  shorts. So editor 2 gets 330 zeros followed by the second half of
+  waveform 1. **Correction:** an earlier version said waveform 2's dialog is
+  cleared. `SubSynthControls::load` reproduces the half.
 - Polyphony goes to `SetPolyphony`, which gets 8 when the field is absent.
 - The two modes go to `SetOscillator1ModulationMode` and
   `SetOscillator2CentsMode`, which get 0 when the fields are absent.
@@ -116,6 +122,4 @@ control id from `SubSynthControls.md`.
 
 - `CreateDefaultMapping`, the default MIDI CC mapping. The control id table
   itself is in `SubSynthControls.md`.
-- `UICustomWaveformDialog::GetWaveform`, which turns 660 raw points into a
-  4096-sample table. This is the missing piece for oscillator types 7 and 8.
 - The pattern editor's block (`SynthPatternEditor`, vtable `+0x80`).

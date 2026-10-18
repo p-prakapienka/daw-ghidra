@@ -183,7 +183,7 @@ what `+0xC2F8` and `+0xC2F9` gate.
 ## Checked against the original
 
 `SubSynth::Process` is identical to the 3.2.0 (beta 7) armv7 library, block
-for block, in 18 scenarios. The emulated side is the whole machine: the
+for block, in 21 scenarios. The emulated side is the whole machine: the
 original constructor, including the control defaults it applies through
 `OnChildModified`, with the original `ProcessPendingNotes`, `PlayChannel`,
 `ProcessChannel`, `ApplyVCA` and `Mixer::MixCrossfade`. The reconstruction
@@ -198,7 +198,9 @@ controls through each control's own `SetValue` and cover:
   volume;
 - LFOs on cutoff, pitch, volume and phase;
 - pitch bend and pitch sweep;
-- blocks of 1 to 128 samples.
+- blocks of 1 to 128 samples;
+- custom waveforms drawn in both editors, played as types 7 and 8 on either
+  oscillator, filtered, and redrawn while a note sounds.
 
 The one change it needed was in the constructor: the filter envelopes' 10,
 20 and 200 sample minimums, and the amplitude envelopes' values, are now

@@ -1,5 +1,6 @@
 #include "SubSynthControls.h"
 
+#include <algorithm>
 #include <cmath>
 #include <limits>
 
@@ -51,7 +52,7 @@ constexpr std::array<SubSynthControls::Control, 31> kControls{{
 constexpr float kModulationModeLow = 0.333f;  // 0x3EAA7EFA
 constexpr float kModulationModeHigh = 0.666f; // 0x3F2A7EFA
 
-// vcvt.s32.f32: truncate toward zero, saturating, with NaN as zero.
+// vcvt.s32.f32: truncate toward zero, clamped to the int range, with NaN as zero.
 int toInt(float value) {
     if (std::isnan(value)) {
         return 0;
@@ -205,6 +206,23 @@ void SubSynthControls::load(const SubSynthArchive &archive) {
         if (control.id <= static_cast<std::uint32_t>(kMaxId)) {
             set(static_cast<int>(control.id), control.value);
         }
+    }
+
+    // The custom waveforms, each through SetRawValues and GetWaveform. Before
+    // 3.0 there is no second waveform and the engine clears only the first
+    // 660 bytes of the buffer still holding the first one, so editor 2 gets
+    // 330 zeros followed by the second half of waveform 1 (0x9d8d0).
+    if (archive.customWaveform1) {
+        synth_.customWaveforms[0].setRawValues(archive.customWaveform1->data());
+        synth_.refreshCustomWavetable(0);
+        SubSynthArchive::Waveform second = *archive.customWaveform1;
+        if (archive.customWaveform2) {
+            second = *archive.customWaveform2;
+        } else {
+            std::fill(second.begin(), second.begin() + second.size() / 2, std::int16_t{0});
+        }
+        synth_.customWaveforms[1].setRawValues(second.data());
+        synth_.refreshCustomWavetable(1);
     }
 
     synth_.setPolyphony(archive.polyphony);
